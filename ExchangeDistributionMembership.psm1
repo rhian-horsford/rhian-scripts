@@ -78,7 +78,11 @@ function Resolve-ExactExchangeRecipient {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Identifier
+        [string]$Identifier,
+
+        [Parameter(Mandatory = $false)]
+        [ValidateSet('Active', 'SoftDeleted', 'InactiveMailbox', 'Both')]
+        [string]$LookupMode = 'Active'
     )
 
     $value = $Identifier.Trim()
@@ -86,20 +90,59 @@ function Resolve-ExactExchangeRecipient {
         throw 'Enter a valid email address or user principal name. Wildcards are not allowed.'
     }
 
-    try {
-        $recipients = @(
-            Get-EXORecipient -Identity $value `
-                -Properties EmailAddresses, UserPrincipalName, PrimarySmtpAddress, Guid, ExternalDirectoryObjectId, RecipientTypeDetails, DisplayName `
-                -ResultSize 2 `
-                -ErrorAction Stop
-        )
-    }
-    catch {
-        throw "Exchange Online could not resolve '$value'. Verify the address and your recipient-read permissions. $($_.Exception.Message)"
+    $recipients = New-Object System.Collections.Generic.List[object]
+    $properties = @(
+        'EmailAddresses'
+        'PrimarySmtpAddress'
+        'Guid'
+        'ExternalDirectoryObjectId'
+        'RecipientTypeDetails'
+        'DisplayName'
+    )
+
+    if ($LookupMode -in @('Active', 'Both')) {
+        try {
+            foreach ($recipient in @(Get-EXORecipient -Identity $value -Properties $properties -ResultSize 2 -ErrorAction Stop)) {
+                $recipients.Add($recipient)
+            }
+        }
+        catch {
+            if ($LookupMode -eq 'Active') {
+                throw "Exchange Online could not resolve '$value'. Verify the address and your recipient-read permissions. $($_.Exception.Message)"
+            }
+        }
     }
 
+    if ($LookupMode -in @('SoftDeleted', 'Both')) {
+        try {
+            foreach ($recipient in @(Get-EXORecipient -Identity $value -IncludeSoftDeletedRecipients -Properties $properties -ResultSize 2 -ErrorAction Stop)) {
+                $recipients.Add($recipient)
+            }
+        }
+        catch {
+            if ($LookupMode -eq 'SoftDeleted') {
+                throw "Exchange Online could not resolve soft-deleted recipient '$value'. Verify the address and your permissions. $($_.Exception.Message)"
+            }
+        }
+    }
+
+    if ($LookupMode -in @('InactiveMailbox', 'Both')) {
+        try {
+            foreach ($recipient in @(Get-Mailbox -Identity $value -InactiveMailboxOnly -ErrorAction Stop)) {
+                $recipients.Add($recipient)
+            }
+        }
+        catch {
+            if ($LookupMode -eq 'InactiveMailbox') {
+                throw "Exchange Online could not resolve inactive mailbox '$value'. Verify retention, permissions, and the identifier. $($_.Exception.Message)"
+            }
+        }
+    }
+
+    $recipients = @($recipients | Sort-Object @{ Expression = { [string]$_.ExternalDirectoryObjectId } }, @{ Expression = { [string]$_.Guid } } -Unique)
+
     if ($recipients.Count -ne 1) {
-        throw "Exchange Online returned $($recipients.Count) recipients for '$value'; exactly one is required."
+        throw "Exchange Online returned $($recipients.Count) recipients for '$value' in lookup mode '$LookupMode'; exactly one is required."
     }
 
     $recipient = $recipients[0]
@@ -273,7 +316,11 @@ function Export-UserDistributionGroupMembership {
         [string]$Path,
 
         [Parameter(Mandatory = $false)]
-        [scriptblock]$StatusAction
+        [scriptblock]$StatusAction,
+
+        [Parameter(Mandatory = $false)]
+        [ValidateSet('Active', 'SoftDeleted', 'InactiveMailbox', 'Both')]
+        [string]$LookupMode = 'Active'
     )
 
     $destination = [System.IO.Path]::GetFullPath($Path)
@@ -285,7 +332,7 @@ function Export-UserDistributionGroupMembership {
     if ($StatusAction) {
         $null = & $StatusAction 0 1 'Resolving recipient...'
     }
-    $recipient = Resolve-ExactExchangeRecipient -Identifier $Identifier
+    $recipient = Resolve-ExactExchangeRecipient -Identifier $Identifier -LookupMode $LookupMode
 
     $staticProgress = {
         param($Current, $Total, $Message)
@@ -303,7 +350,20 @@ function Export-UserDistributionGroupMembership {
             $null = & $StatusAction $percent 100 $Message
         }
     }
-    $dynamicResult = Get-DynamicDistributionMembershipRows -Recipient $recipient -StatusAction $dynamicProgress
+    $dynamicResult = if ($LookupMode -eq 'Active') {
+        Get-DynamicDistributionMembershipRows -Recipient $recipient -StatusAction $dynamicProgress
+    }
+    else {
+        if ($StatusAction) {
+            $null = & $StatusAction 95 100 'Dynamic membership is not evaluated for inactive recipients.'
+        }
+        [pscustomobject]@{
+            Rows   = @()
+            Errors = @()
+            Count  = 0
+            Status = 'Not evaluated for inactive recipient'
+        }
+    }
 
     $evaluationErrors = @($staticResult.Errors) + @($dynamicResult.Errors)
     if ($evaluationErrors.Count -gt 0) {
@@ -345,11 +405,18 @@ function Export-UserDistributionGroupMembership {
     return [pscustomobject]@{
         RecipientDisplayName = [string]$recipient.DisplayName
         RecipientAddress     = [string]$recipient.PrimarySmtpAddress
+        LookupMode           = $LookupMode
         StaticGroupCount     = @($staticResult.Rows).Count
         DynamicGroupCount    = @($dynamicResult.Rows).Count
         TotalGroupCount      = $rows.Count
         StaticGroupsChecked  = $staticResult.Count
         DynamicGroupsChecked = $dynamicResult.Count
+        DynamicMembershipStatus = if ($dynamicResult.PSObject.Properties['Status'] -and $dynamicResult.Status) {
+            $dynamicResult.Status
+        }
+        else {
+            'Evaluated'
+        }
         Path                 = $destination
     }
 }

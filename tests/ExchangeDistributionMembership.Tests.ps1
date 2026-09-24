@@ -17,6 +17,57 @@ Describe 'Test-RecipientIdentifier' {
     }
 }
 
+Describe 'Resolve-ExactExchangeRecipient lookup modes' {
+    InModuleScope ExchangeDistributionMembership {
+        if (-not (Get-Command Get-Mailbox -ErrorAction SilentlyContinue)) {
+            function Get-Mailbox { }
+        }
+    }
+
+    It 'includes soft-deleted recipients when requested' {
+        Mock Get-EXORecipient -ModuleName ExchangeDistributionMembership {
+            param($Identity, $IncludeSoftDeletedRecipients)
+            [pscustomobject]@{
+                DisplayName              = 'Former User'
+                PrimarySmtpAddress       = 'former.user@contoso.com'
+                UserPrincipalName        = 'former.user@contoso.com'
+                EmailAddresses           = @('smtp:former.user@contoso.com')
+                ExternalDirectoryObjectId = 'soft-deleted-1'
+                Guid                      = '11111111-1111-1111-1111-111111111111'
+            }
+        }
+
+        $recipient = Resolve-ExactExchangeRecipient `
+            -Identifier 'former.user@contoso.com' `
+            -LookupMode SoftDeleted
+
+        $recipient.DisplayName | Should Be 'Former User'
+        Assert-MockCalled Get-EXORecipient -ModuleName ExchangeDistributionMembership -ParameterFilter {
+            $IncludeSoftDeletedRecipients -eq $true
+        }
+    }
+
+    It 'resolves inactive mailboxes with the inactive-only switch' {
+        Mock Get-Mailbox -ModuleName ExchangeDistributionMembership {
+            param($Identity, $InactiveMailboxOnly)
+            [pscustomobject]@{
+                DisplayName              = 'Retained User'
+                PrimarySmtpAddress       = 'retained.user@contoso.com'
+                UserPrincipalName        = 'retained.user@contoso.com'
+                EmailAddresses           = @('smtp:retained.user@contoso.com')
+                ExternalDirectoryObjectId = 'inactive-1'
+                Guid                      = '22222222-2222-2222-2222-222222222222'
+            }
+        }
+
+        $recipient = Resolve-ExactExchangeRecipient `
+            -Identifier 'retained.user@contoso.com' `
+            -LookupMode InactiveMailbox
+
+        $recipient.DisplayName | Should Be 'Retained User'
+    }
+}
+
 Describe 'Test-RecipientIdentityMatch' {
     It 'uses an exact case-insensitive immutable identity match' {
         $target = [pscustomobject]@{

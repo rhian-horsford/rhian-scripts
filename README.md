@@ -52,7 +52,10 @@ export when a group cannot be evaluated.
 4. Select **Connect** and complete the Microsoft Exchange Online sign-in flow.
 5. Enter the user's exact email address or user principal name. Wildcards,
    aliases, and display names are intentionally rejected.
-6. Select **Browse**, choose a CSV destination, and select **Export CSV**.
+6. Choose the recipient search scope. Active recipients are selected by
+  default; soft-deleted recipients and inactive mailboxes can be searched
+  explicitly.
+7. Select **Browse**, choose a CSV destination, and select **Export CSV**.
 
 Authentication and membership evaluation run on a reusable background runspace,
 so the WPF window remains responsive. The status area shows the current group
@@ -87,6 +90,17 @@ An empty result still creates a CSV containing the column headers.
   identity and evaluates it server-side using `Get-Recipient
   -RecipientPreviewFilter`. When present, `RecipientContainer` is supplied as
   `-OrganizationalUnit`; it is not approximated with string matching.
+- **Inactive recipient searches are limited.** Soft-deleted recipients are
+  resolved with `Get-EXORecipient -IncludeSoftDeletedRecipients`. Inactive
+  mailboxes are resolved with `Get-Mailbox -InactiveMailboxOnly`. These
+  searches require the recipient to remain available under the tenant's
+  retention policy and require the signed-in account to have permission to
+  read it.
+- **Dynamic membership is not evaluated for inactive recipients.** Dynamic
+  distribution filters describe current recipient state, so the export
+  reports dynamic membership as not evaluated rather than presenting an
+  inactive recipient as a confirmed non-match. Static direct membership is
+  still checked.
 - Exchange Online stores a calculated dynamic distribution group membership
   list for message delivery and refreshes it periodically (normally every 24
   hours). A current filter match can therefore temporarily differ from the

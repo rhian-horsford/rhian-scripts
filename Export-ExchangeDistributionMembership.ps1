@@ -37,6 +37,7 @@ $modulePath = Join-Path $PSScriptRoot 'ExchangeDistributionMembership.psm1'
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <StackPanel Grid.Row="0" Margin="0,0,0,24">
@@ -65,7 +66,17 @@ $modulePath = Join-Path $PSScriptRoot 'ExchangeDistributionMembership.psm1'
             <TextBlock x:Name="ValidationText" Foreground="#B42318" Margin="2,5,0,0" Visibility="Collapsed"/>
         </StackPanel>
 
-        <StackPanel Grid.Row="3" Margin="0,0,0,16">
+        <StackPanel Grid.Row="3" Margin="0,0,0,14">
+            <TextBlock Text="Recipient search scope" FontWeight="SemiBold" Foreground="#172B4D" Margin="0,0,0,6"/>
+            <ComboBox x:Name="LookupModeComboBox" SelectedValuePath="Tag" SelectedValue="Active">
+                <ComboBoxItem Content="Active recipients" Tag="Active"/>
+                <ComboBoxItem Content="Soft-deleted recipients" Tag="SoftDeleted"/>
+                <ComboBoxItem Content="Inactive mailboxes" Tag="InactiveMailbox"/>
+                <ComboBoxItem Content="Soft-deleted recipients and inactive mailboxes" Tag="Both"/>
+            </ComboBox>
+        </StackPanel>
+
+        <StackPanel Grid.Row="4" Margin="0,0,0,16">
             <TextBlock Text="CSV destination" FontWeight="SemiBold" Foreground="#172B4D" Margin="0,0,0,6"/>
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -77,7 +88,7 @@ $modulePath = Join-Path $PSScriptRoot 'ExchangeDistributionMembership.psm1'
             </Grid>
         </StackPanel>
 
-        <Border Grid.Row="4" Background="White" BorderBrush="#DCE2EA" BorderThickness="1" CornerRadius="6" Padding="18">
+        <Border Grid.Row="5" Background="White" BorderBrush="#DCE2EA" BorderThickness="1" CornerRadius="6" Padding="18">
             <StackPanel>
                 <TextBlock Text="Status" FontWeight="SemiBold" Foreground="#172B4D"/>
                 <TextBlock x:Name="OperationStatusText" Text="Ready." Margin="0,7,0,10" TextWrapping="Wrap" Foreground="#53657D"/>
@@ -85,7 +96,7 @@ $modulePath = Join-Path $PSScriptRoot 'ExchangeDistributionMembership.psm1'
             </StackPanel>
         </Border>
 
-        <Grid Grid.Row="5" Margin="0,20,0,0">
+        <Grid Grid.Row="6" Margin="0,20,0,0">
             <TextBlock VerticalAlignment="Center" Foreground="#66758A" Text="No changes are made in Exchange Online."/>
             <Button x:Name="ExportButton" Content="Export CSV" HorizontalAlignment="Right" IsEnabled="False" Background="#157347" Foreground="White" Margin="0"/>
         </Grid>
@@ -99,6 +110,7 @@ $window = [Windows.Markup.XamlReader]::Load($reader)
 $connectButton = $window.FindName('ConnectButton')
 $connectionStatusText = $window.FindName('ConnectionStatusText')
 $identifierTextBox = $window.FindName('IdentifierTextBox')
+$lookupModeComboBox = $window.FindName('LookupModeComboBox')
 $validationText = $window.FindName('ValidationText')
 $destinationTextBox = $window.FindName('DestinationTextBox')
 $browseButton = $window.FindName('BrowseButton')
@@ -169,6 +181,7 @@ function Start-BackgroundOperation {
     $browseButton.IsEnabled = $false
     $exportButton.IsEnabled = $false
     $identifierTextBox.IsEnabled = $false
+    $lookupModeComboBox.IsEnabled = $false
     $operationProgressBar.IsIndeterminate = ($Operation -eq 'Connect')
     if ($Operation -eq 'Connect') {
         $state.Connected = $false
@@ -219,6 +232,7 @@ $timer.Add_Tick({
         $connectButton.IsEnabled = $true
         $browseButton.IsEnabled = $true
         $identifierTextBox.IsEnabled = $true
+        $lookupModeComboBox.IsEnabled = $true
 
         if ($state.Error) {
             $operationProgressBar.Value = 0
@@ -244,8 +258,9 @@ $timer.Add_Tick({
 Export complete.
 
 Recipient: $($summary.RecipientDisplayName) <$($summary.RecipientAddress)>
+Search scope: $($summary.LookupMode)
 Static direct memberships: $($summary.StaticGroupCount)
-Dynamic filter matches: $($summary.DynamicGroupCount)
+Dynamic filter matches: $($summary.DynamicGroupCount) ($($summary.DynamicMembershipStatus))
 Total records: $($summary.TotalGroupCount)
 
 CSV: $($summary.Path)
@@ -295,7 +310,7 @@ $connectScript = {
 }
 
 $exportScript = {
-    param($State, $ModulePath, $Identifier, $Destination)
+    param($State, $ModulePath, $Identifier, $Destination, $LookupMode)
     try {
         Import-Module $ModulePath -Force -ErrorAction Stop
         $statusAction = {
@@ -306,6 +321,7 @@ $exportScript = {
         $State.Result = Export-UserDistributionGroupMembership `
             -Identifier $Identifier `
             -Path $Destination `
+            -LookupMode $LookupMode `
             -StatusAction $statusAction `
             -ErrorAction Stop
     }
@@ -363,7 +379,7 @@ $exportButton.Add_Click({
     Start-BackgroundOperation `
         -Operation 'Export' `
         -Script $exportScript `
-        -Arguments @($identifierTextBox.Text.Trim(), $destinationTextBox.Text)
+        -Arguments @($identifierTextBox.Text.Trim(), $destinationTextBox.Text, [string]$lookupModeComboBox.SelectedValue)
 })
 
 $window.Add_Closing({
