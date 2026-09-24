@@ -122,6 +122,7 @@ $state = [hashtable]::Synchronized(@{
     Busy      = $false
     Connected = $false
     Done      = $false
+    CompletionHandled = $false
     Status    = 'Ready.'
     Percent   = 0
     Result    = $null
@@ -171,6 +172,7 @@ function Start-BackgroundOperation {
 
     $state.Busy = $true
     $state.Done = $false
+    $state.CompletionHandled = $false
     $state.Error = $null
     $state.Result = $null
     $state.Operation = $Operation
@@ -207,7 +209,8 @@ $timer.Add_Tick({
         $operationProgressBar.Value = [double]$state.Percent
     }
 
-    if ($state.Busy -and $state.Done) {
+    if ($state.Busy -and $state.Done -and -not $state.CompletionHandled) {
+        $state.CompletionHandled = $true
         try {
             if ($script:activePowerShell -and $script:asyncResult) {
                 $null = $script:activePowerShell.EndInvoke($script:asyncResult)
@@ -215,7 +218,7 @@ $timer.Add_Tick({
         }
         catch {
             if (-not $state.Error) {
-                $state.Error = $_.Exception.Message
+                $state.Error = $_.Exception.ToString()
             }
         }
         finally {
@@ -302,7 +305,7 @@ $connectScript = {
         $State.Status = 'Connected to Exchange Online.'
     }
     catch {
-        $State.Error = $_.Exception.Message
+        $State.Error = $_.Exception.ToString()
     }
     finally {
         $State.Done = $true
@@ -326,7 +329,7 @@ $exportScript = {
             -ErrorAction Stop
     }
     catch {
-        $State.Error = $_.Exception.Message
+        $State.Error = $_.Exception.ToString()
     }
     finally {
         $State.Done = $true
@@ -383,7 +386,7 @@ $exportButton.Add_Click({
 })
 
 $window.Add_Closing({
-    param($sender, $eventArgs)
+    param($windowSender, $windowEventArgs)
     if ($state.Busy) {
         $choice = [System.Windows.MessageBox]::Show(
             $window,
@@ -393,7 +396,7 @@ $window.Add_Closing({
             [System.Windows.MessageBoxImage]::Warning
         )
         if ($choice -ne [System.Windows.MessageBoxResult]::Yes) {
-            $eventArgs.Cancel = $true
+            $windowEventArgs.Cancel = $true
             return
         }
         if ($script:activePowerShell) {

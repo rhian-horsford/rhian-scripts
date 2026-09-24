@@ -66,6 +66,24 @@ Describe 'Resolve-ExactExchangeRecipient lookup modes' {
 
         $recipient.DisplayName | Should Be 'Retained User'
     }
+
+    It 'accepts a recipient response without UserPrincipalName when the SMTP address matches' {
+        Mock Get-EXORecipient -ModuleName ExchangeDistributionMembership {
+            [pscustomobject]@{
+                DisplayName               = 'SMTP Only User'
+                PrimarySmtpAddress        = 'smtp.only@contoso.com'
+                EmailAddresses            = @('smtp:smtp.only@contoso.com')
+                ExternalDirectoryObjectId = 'smtp-only-1'
+                Guid                       = '33333333-3333-3333-3333-333333333333'
+            }
+        }
+
+        $recipient = Resolve-ExactExchangeRecipient `
+            -Identifier 'smtp.only@contoso.com' `
+            -LookupMode Active
+
+        $recipient.DisplayName | Should Be 'SMTP Only User'
+    }
 }
 
 Describe 'Test-RecipientIdentityMatch' {

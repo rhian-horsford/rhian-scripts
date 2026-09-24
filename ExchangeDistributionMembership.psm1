@@ -146,8 +146,14 @@ function Resolve-ExactExchangeRecipient {
     }
 
     $recipient = $recipients[0]
-    $matchesUpn = -not [string]::IsNullOrWhiteSpace([string]$recipient.UserPrincipalName) -and
-        ([string]$recipient.UserPrincipalName).Equals($value, [System.StringComparison]::OrdinalIgnoreCase)
+    $userPrincipalName = if ($recipient.PSObject.Properties['UserPrincipalName']) {
+        [string]$recipient.UserPrincipalName
+    }
+    else {
+        ''
+    }
+    $matchesUpn = -not [string]::IsNullOrWhiteSpace($userPrincipalName) -and
+        $userPrincipalName.Equals($value, [System.StringComparison]::OrdinalIgnoreCase)
     $matchesProxyAddress = $false
 
     foreach ($proxyAddress in @($recipient.EmailAddresses)) {
@@ -334,22 +340,23 @@ function Export-UserDistributionGroupMembership {
     }
     $recipient = Resolve-ExactExchangeRecipient -Identifier $Identifier -LookupMode $LookupMode
 
+    $progressCallback = $StatusAction
     $staticProgress = {
         param($Current, $Total, $Message)
-        if ($StatusAction) {
+        if ($progressCallback) {
             $percent = if ($Total -gt 0) { [int](5 + (($Current / $Total) * 45)) } else { 50 }
-            $null = & $StatusAction $percent 100 $Message
+            $null = & $progressCallback $percent 100 $Message
         }
-    }
+    }.GetNewClosure()
     $staticResult = Get-StaticDistributionMembershipRows -Recipient $recipient -StatusAction $staticProgress
 
     $dynamicProgress = {
         param($Current, $Total, $Message)
-        if ($StatusAction) {
+        if ($progressCallback) {
             $percent = if ($Total -gt 0) { [int](50 + (($Current / $Total) * 45)) } else { 95 }
-            $null = & $StatusAction $percent 100 $Message
+            $null = & $progressCallback $percent 100 $Message
         }
-    }
+    }.GetNewClosure()
     $dynamicResult = if ($LookupMode -eq 'Active') {
         Get-DynamicDistributionMembershipRows -Recipient $recipient -StatusAction $dynamicProgress
     }
