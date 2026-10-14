@@ -8,6 +8,24 @@ Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 
+# The Windows app-theme preference is read again when Windows notifies us of a change.
+$systemTheme = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name AppsUseLightTheme -ErrorAction SilentlyContinue
+$isLightTheme = $null -eq $systemTheme -or [int]$systemTheme.AppsUseLightTheme -ne 0
+$lightThemeColors = [ordered]@{
+    '#131417' = '#F4F6FA'; '#30333C' = '#E0E4EB'; '#737B89' = '#697386'
+    '#17191E' = '#FFFFFF'; '#F0F2F6' = '#202A38'; '#383C47' = '#C8CFDA'
+    '#1E2027' = '#FFFFFF'; '#E9ECF2' = '#263243'; '#23262E' = '#F1F3F6'
+    '#30343E' = '#D9DEE6'; '#252831' = '#E8ECF2'; '#B6BFCD' = '#455368'
+    '#343843' = '#CDD4DE'; '#2A2E38' = '#E4EAF3'; '#173A78' = '#315D9D'
+    '#1264FF' = '#0B5CE0'; '#F3F5F8' = '#202A38'; '#282B34' = '#E9EDF4'
+    '#A6AFBD' = '#58667A'; '#19D8DF' = '#009AA6'; '#FF4568' = '#DB3656'
+    '#B9A3FF' = '#8665D9'; '#D0FF47' = '#8AAF18'; '#F2F4F8' = '#1D2939'
+    '#9AA4B3' = '#5B6778'; '#20232A' = '#F4F6FA'; '#FFB454' = '#8C5200'
+    '#343842' = '#CDD4DE'; '#2B2F38' = '#D5DBE4'; '#2A2D36' = '#E8ECF2'
+    '#E7EAF0' = '#263243'
+    '#858E9C' = '#5C6879'; '#FF7185' = '#B4233B'; '#76E0A8' = '#08743C'
+}
+
 class TrusteeRow {
     [string]$Entry
     [string]$Status
@@ -26,28 +44,143 @@ class TrusteeRow {
     }
 }
 
-[xml]$xaml = @'
+$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Shared Mailbox Permission Manager"
         Height="860" Width="920" MinHeight="640" MinWidth="720"
-        WindowStartupLocation="CenterScreen" Background="#F5F7FA">
+        WindowStartupLocation="CenterScreen" Background="#131417">
     <Window.Resources>
         <Style TargetType="Button">
             <Setter Property="Padding" Value="16,8"/>
             <Setter Property="MinWidth" Value="110"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ButtonBorder" Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.88"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.72"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="#30333C"/>
+                                <Setter Property="Foreground" Value="#737B89"/>
+                                <Setter TargetName="ButtonBorder" Property="Opacity" Value="1"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
         <Style TargetType="TextBox">
             <Setter Property="Padding" Value="8,6"/>
-            <Setter Property="BorderBrush" Value="#AAB4C3"/>
+            <Setter Property="Background" Value="#17191E"/>
+            <Setter Property="Foreground" Value="#F0F2F6"/>
+            <Setter Property="CaretBrush" Value="#F0F2F6"/>
+            <Setter Property="BorderBrush" Value="#383C47"/>
+            <Setter Property="BorderThickness" Value="1"/>
         </Style>
         <Style TargetType="CheckBox">
             <Setter Property="Margin" Value="0,0,24,0"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Foreground" Value="#E9ECF2"/>
+        </Style>
+        <Style TargetType="ComboBox">
+            <Setter Property="Background" Value="#252831"/>
+            <Setter Property="Foreground" Value="#F0F2F6"/>
+            <Setter Property="BorderBrush" Value="#414550"/>
+            <Setter Property="Padding" Value="6,4"/>
+        </Style>
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="Background" Value="#252831"/>
+            <Setter Property="Foreground" Value="#F0F2F6"/>
+            <Setter Property="Padding" Value="8,5"/>
+            <Style.Triggers>
+                <Trigger Property="IsHighlighted" Value="True">
+                    <Setter Property="Background" Value="#173A78"/>
+                    <Setter Property="Foreground" Value="White"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style TargetType="DataGrid">
+            <Setter Property="Background" Value="#1E2027"/>
+            <Setter Property="Foreground" Value="#E9ECF2"/>
+            <Setter Property="RowBackground" Value="#1E2027"/>
+            <Setter Property="AlternatingRowBackground" Value="#23262E"/>
+            <Setter Property="BorderBrush" Value="#30343E"/>
+            <Setter Property="HorizontalGridLinesBrush" Value="#30343E"/>
+            <Setter Property="VerticalGridLinesBrush" Value="#30343E"/>
+            <Setter Property="RowHeaderWidth" Value="0"/>
+            <Setter Property="GridLinesVisibility" Value="Horizontal"/>
+        </Style>
+        <Style TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="#252831"/>
+            <Setter Property="Foreground" Value="#B6BFCD"/>
+            <Setter Property="BorderBrush" Value="#343843"/>
+            <Setter Property="Padding" Value="9,8"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+        <Style TargetType="DataGridRow">
+            <Setter Property="Foreground" Value="#E9ECF2"/>
+            <Setter Property="BorderBrush" Value="#30343E"/>
+            <Setter Property="MinHeight" Value="34"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#2A2E38"/>
+                </Trigger>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="#173A78"/>
+                    <Setter Property="Foreground" Value="White"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style TargetType="DataGridCell">
+            <Setter Property="Foreground" Value="#E9ECF2"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="8,6"/>
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="#173A78"/>
+                    <Setter Property="Foreground" Value="White"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style TargetType="ProgressBar">
+            <Setter Property="Background" Value="#30333C"/>
+            <Setter Property="Foreground" Value="#1264FF"/>
+            <Setter Property="BorderThickness" Value="0"/>
         </Style>
     </Window.Resources>
-    <Grid Margin="20">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="5"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="1.2*"/>
+                <ColumnDefinition Width="1.2*"/>
+                <ColumnDefinition Width="1.2*"/>
+                <ColumnDefinition Width="1.2*"/>
+                <ColumnDefinition Width="1.2*"/>
+            </Grid.ColumnDefinitions>
+            <Border Background="#1264FF"/>
+            <Border Grid.Column="1" Background="#19D8DF"/>
+            <Border Grid.Column="2" Background="#FF4568"/>
+            <Border Grid.Column="3" Background="#B9A3FF"/>
+            <Border Grid.Column="4" Background="#D0FF47"/>
+        </Grid>
+
+        <Grid Grid.Row="1" Margin="22">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*" MinHeight="200"/>
@@ -62,21 +195,23 @@ class TrusteeRow {
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="Shared mailbox permissions" FontSize="20" FontWeight="SemiBold" Foreground="#172B4D"/>
-                <TextBlock Margin="0,4,0,0" Foreground="#53657D" TextWrapping="Wrap"
+                <TextBlock Text="Shared mailbox permissions" FontSize="20" FontWeight="SemiBold" Foreground="#F2F4F8"/>
+                <TextBlock Margin="0,4,0,0" Foreground="#9AA4B3" TextWrapping="Wrap"
                            Text="Grant Full Access and/or Send As permissions on a shared mailbox to one or more users."/>
             </StackPanel>
-            <TextBlock x:Name="ConnectionStatusText" Grid.Column="1" Text="Not connected" VerticalAlignment="Center" Margin="12,0,12,0" Foreground="#B42318"/>
+            <Border Grid.Column="1" Background="#20232A" BorderBrush="#343842" BorderThickness="1" CornerRadius="6" Padding="10,7" Margin="12,0,12,0" VerticalAlignment="Center">
+                <TextBlock x:Name="ConnectionStatusText" Text="Not connected" Foreground="#FFB454"/>
+            </Border>
             <Button x:Name="ConnectButton" Grid.Column="2" Content="Connect" VerticalAlignment="Center" Background="#0B63CE" Foreground="White"/>
         </Grid>
 
         <StackPanel Margin="0,0,0,12">
-            <TextBlock Text="Shared mailbox email address" FontWeight="SemiBold" Foreground="#172B4D" Margin="0,0,0,6"/>
+            <TextBlock Text="Shared mailbox email address" FontWeight="SemiBold" Foreground="#E9ECF2" Margin="0,0,0,6"/>
             <TextBox x:Name="MailboxTextBox" ToolTip="Exact SMTP address or UPN of the shared mailbox."/>
         </StackPanel>
 
         <StackPanel Margin="0,0,0,12">
-            <TextBlock Text="Users to add: names or email addresses (one per line, or separated by semicolons)" FontWeight="SemiBold" Foreground="#172B4D" Margin="0,0,0,6"/>
+            <TextBlock Text="Users to add: names or email addresses (one per line, or separated by semicolons)" FontWeight="SemiBold" Foreground="#E9ECF2" Margin="0,0,0,6"/>
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -85,24 +220,24 @@ class TrusteeRow {
                 <TextBox x:Name="UsersTextBox" Height="70" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          ToolTip="Full or partial names (e.g. 'Jane Smith', 'Smith, Jane') or exact email addresses. Wildcards are not allowed."/>
                 <Button x:Name="CheckUsersButton" Grid.Column="1" Content="Check users" VerticalAlignment="Top" Margin="10,0,0,0"
-                        IsEnabled="False" Background="#E9EEF5" Foreground="#172B4D"/>
+                    IsEnabled="False" Background="#2A2D36" Foreground="#E7EAF0"/>
             </Grid>
         </StackPanel>
 
-        <Border Background="White" BorderBrush="#DCE2EA" BorderThickness="1" CornerRadius="6" Padding="10">
+        <Border Background="#1E2027" BorderBrush="#2B2F38" BorderThickness="1" CornerRadius="8" Padding="10">
             <StackPanel>
-                <TextBlock Text="Permissions" FontWeight="SemiBold" Foreground="#172B4D" Margin="0,0,0,8"/>
+            <TextBlock Text="Permissions" FontWeight="SemiBold" Foreground="#E9ECF2" Margin="0,0,0,8"/>
                 <StackPanel Orientation="Horizontal">
                     <CheckBox x:Name="FullAccessCheckBox" Content="Full Access" IsChecked="True"/>
                     <CheckBox x:Name="SendAsCheckBox" Content="Send As"/>
                     <CheckBox x:Name="AutoMappingCheckBox" Content="Auto-map mailbox in Outlook (Full Access only)" IsChecked="True"/>
                 </StackPanel>
-                <TextBlock x:Name="ValidationText" Foreground="#B42318" Margin="0,8,0,0" TextWrapping="Wrap" Visibility="Collapsed"/>
+                <TextBlock x:Name="ValidationText" Foreground="#FF7185" Margin="0,8,0,0" TextWrapping="Wrap" Visibility="Collapsed"/>
             </StackPanel>
         </Border>
         </StackPanel>
 
-        <Border Grid.Row="1" Background="White" BorderBrush="#DCE2EA" BorderThickness="1" CornerRadius="6" Padding="14">
+        <Border Grid.Row="1" Background="#1E2027" BorderBrush="#2B2F38" BorderThickness="1" CornerRadius="8" Padding="14">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
@@ -110,11 +245,11 @@ class TrusteeRow {
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
-                <TextBlock Text="Status" FontWeight="SemiBold" Foreground="#172B4D"/>
-                <TextBlock x:Name="OperationStatusText" Grid.Row="1" Text="Ready." Margin="0,7,0,10" TextWrapping="Wrap" Foreground="#53657D"/>
+                <TextBlock Text="Status" FontWeight="SemiBold" Foreground="#E9ECF2"/>
+                <TextBlock x:Name="OperationStatusText" Grid.Row="1" Text="Ready." Margin="0,7,0,10" TextWrapping="Wrap" Foreground="#9AA4B3"/>
                 <ProgressBar x:Name="OperationProgressBar" Grid.Row="2" Height="8" Minimum="0" Maximum="100" Value="0" Margin="0,0,0,10"/>
                 <DataGrid x:Name="ReviewGrid" Grid.Row="3" AutoGenerateColumns="False" IsReadOnly="True" HeadersVisibility="Column"
-                          CanUserAddRows="False" GridLinesVisibility="Horizontal" BorderBrush="#DCE2EA" MinRowHeight="32"
+                          CanUserAddRows="False" GridLinesVisibility="Horizontal" BorderBrush="#30343E" MinRowHeight="32"
                           VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="Entry" Binding="{Binding Entry}" Width="2*"/>
@@ -130,7 +265,7 @@ class TrusteeRow {
                     </DataGrid.Columns>
                 </DataGrid>
                 <DataGrid x:Name="ResultsGrid" Grid.Row="3" AutoGenerateColumns="False" IsReadOnly="True" HeadersVisibility="Column"
-                          CanUserAddRows="False" GridLinesVisibility="Horizontal" BorderBrush="#DCE2EA" MinRowHeight="28" Visibility="Collapsed"
+                          CanUserAddRows="False" GridLinesVisibility="Horizontal" BorderBrush="#30343E" MinRowHeight="28" Visibility="Collapsed"
                           VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="User" Binding="{Binding User}" Width="2*"/>
@@ -149,15 +284,26 @@ class TrusteeRow {
         </Border>
 
         <Grid Grid.Row="2" Margin="0,14,0,0">
-            <TextBlock VerticalAlignment="Center" Foreground="#66758A" Text="Changes are applied to Exchange Online immediately."/>
+            <TextBlock VerticalAlignment="Center" Foreground="#858E9C" Text="Changes are applied to Exchange Online immediately."/>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button x:Name="CloseButton" Content="Close" Margin="0,0,8,0" Background="#E9EEF5" Foreground="#172B4D"/>
-                <Button x:Name="AddButton" Content="Add permissions" IsEnabled="False" Background="#157347" Foreground="White"/>
+                <Button x:Name="CloseButton" Content="Close" Margin="0,0,8,0" Background="#2A2D36" Foreground="#E7EAF0"/>
+                <Button x:Name="AddButton" Content="Add permissions" IsEnabled="False" Background="#1264FF" Foreground="White"/>
             </StackPanel>
+        </Grid>
         </Grid>
     </Grid>
 </Window>
 '@
+
+$themeHexColors = @([regex]::Matches($xaml, '#[0-9A-Fa-f]{6}') | ForEach-Object { $_.Value } | Sort-Object -Unique)
+$themeBrushMarkup = ''
+foreach ($color in $themeHexColors) {
+    $key = 'ThemeColor' + $color.Substring(1).ToUpperInvariant()
+    $themeBrushMarkup += "        <SolidColorBrush x:Key=`"$key`" Color=`"$color`"/>`n"
+    $xaml = $xaml.Replace($color, "{DynamicResource $key}")
+}
+$xaml = $xaml.Replace('<Window.Resources>', "<Window.Resources>`n$themeBrushMarkup")
+[xml]$xaml = $xaml
 
 $reader = New-Object System.Xml.XmlNodeReader($xaml)
 $window = [Windows.Markup.XamlReader]::Load($reader)
@@ -177,6 +323,44 @@ $operationProgressBar = $window.FindName('OperationProgressBar')
 $resultsGrid = $window.FindName('ResultsGrid')
 $addButton = $window.FindName('AddButton')
 $closeButton = $window.FindName('CloseButton')
+$script:window = $window
+$script:connectionStatusText = $connectionStatusText
+
+function Get-SystemLightTheme {
+    $setting = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name AppsUseLightTheme -ErrorAction SilentlyContinue
+    return ($null -eq $setting -or [int]$setting.AppsUseLightTheme -ne 0)
+}
+
+function Set-WindowTheme {
+    param([bool]$LightTheme)
+    foreach ($color in $script:themeHexColors) {
+        $key = 'ThemeColor' + $color.Substring(1).ToUpperInvariant()
+        $targetColor = if ($LightTheme -and $script:lightThemeColors.Contains($color)) { $script:lightThemeColors[$color] } else { $color }
+        $newBrush = [System.Windows.Media.SolidColorBrush]::new(
+            [System.Windows.Media.ColorConverter]::ConvertFromString($targetColor)
+        )
+        $script:window.Resources[$key] = $newBrush
+    }
+    $script:isLightTheme = $LightTheme
+}
+
+function Set-ConnectionStatusTone {
+    param([string]$Color)
+    $key = 'ThemeColor' + $Color.TrimStart('#').ToUpperInvariant()
+    $script:connectionStatusText.Foreground = $script:window.Resources[$key]
+}
+
+Set-WindowTheme -LightTheme $isLightTheme
+
+$themeTimer = New-Object System.Windows.Threading.DispatcherTimer
+$themeTimer.Interval = [TimeSpan]::FromSeconds(1)
+$themeTimer.Add_Tick({
+    $lightTheme = Get-SystemLightTheme
+    if ($lightTheme -ne $script:isLightTheme) {
+        Set-WindowTheme -LightTheme $lightTheme
+    }
+})
+$themeTimer.Start()
 
 $workArea = [System.Windows.SystemParameters]::WorkArea
 $window.Height = [Math]::Min($window.Height, $workArea.Height)
@@ -290,7 +474,7 @@ function Start-BackgroundOperation {
     if ($Operation -eq 'Connect') {
         $state.Connected = $false
         $connectionStatusText.Text = 'Connecting...'
-        $connectionStatusText.Foreground = '#9A6700'
+        Set-ConnectionStatusTone -Color '#FFB454'
     }
 
     $ps = [powershell]::Create()
@@ -341,14 +525,14 @@ $timer.Add_Tick({
             $operationStatusText.Text = "$completedOperation failed."
             if ($completedOperation -eq 'Connect') {
                 $connectionStatusText.Text = 'Not connected'
-                $connectionStatusText.Foreground = '#B42318'
+                Set-ConnectionStatusTone -Color '#FF7185'
             }
             Show-ErrorDialog -Title "$completedOperation failed" -Message ([string]$state.Error)
         }
         elseif ($completedOperation -eq 'Connect') {
             $state.Connected = $true
             $connectionStatusText.Text = "Connected as $($state.UserPrincipalName)"
-            $connectionStatusText.Foreground = '#157347'
+            Set-ConnectionStatusTone -Color '#76E0A8'
             $connectButton.Content = 'Reconnect'
             $operationStatusText.Text = 'Connected. Enter a shared mailbox and users, then select Check users.'
         }
@@ -748,6 +932,7 @@ $window.Add_Closing({
 })
 
 $window.Add_Closed({
+    $themeTimer.Stop()
     $timer.Stop()
     if ($script:activePowerShell) {
         $script:activePowerShell.Dispose()
