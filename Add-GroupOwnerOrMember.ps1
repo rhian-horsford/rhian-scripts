@@ -179,7 +179,8 @@ $resolveScript = {
 }
 
 $addScript = {
-    param($State, $Group, $Users, $AddMember, $AddOwner, $BypassManagerCheck, $EnsureConnection)
+    param($State, $Group, $Users, $AddMember, $AddOwner, $BypassManagerCheck, $EnsureConnection,
+        [ValidateSet('Add', 'Remove')][string]$Action = 'Add')
     try {
         & $EnsureConnection $State
         if (-not ($AddMember -or $AddOwner) -or $Users.Count -eq 0) {
@@ -201,7 +202,9 @@ $addScript = {
 
         $members = @{}
         $owners = @{}
-        $needsMembers = $AddMember -or ($isUnified -and $AddOwner)
+        $removing = $Action -eq 'Remove'
+        $needsMembers = $AddMember -or ($isUnified -and $AddOwner -and -not $removing)
+        $needsOwners = $AddOwner -or ($isUnified -and $AddMember -and $removing)
         $State.Status = "Reading existing roles on $target..."
         if ($needsMembers) {
             $existingMembers = if ($isUnified) {
@@ -212,7 +215,7 @@ $addScript = {
                 $members[[string]$member.PrimarySmtpAddress] = $true
             }
         }
-        if ($AddOwner) {
+        if ($needsOwners) {
             $existingOwners = if ($isUnified) {
                 @(Get-UnifiedGroupLinks -Identity $target -LinkType Owners -ResultSize Unlimited -ErrorAction Stop)
             }
@@ -227,8 +230,9 @@ $addScript = {
         }
 
         $roles = @(
+            if ($removing -and $needsOwners) { 'Owner' }
             if ($needsMembers) { 'Member' }
-            if ($AddOwner) { 'Owner' }
+            if (-not $removing -and $needsOwners) { 'Owner' }
         )
         $results = [System.Collections.Generic.List[object]]::new()
         $total = $Users.Count * $roles.Count
@@ -236,37 +240,60 @@ $addScript = {
         foreach ($user in $Users) {
             foreach ($role in $roles) {
                 $step++
-                $State.Status = "Adding $role on $target for $($user.Label) ($step of $total)..."
+                $State.Status = "$Action $role on $target for $($user.Label) ($step of $total)..."
                 $roleSet = if ($role -eq 'Member') { $members } else { $owners }
                 $details = ''
                 $result = 'Success'
                 try {
-                    if ($roleSet.ContainsKey($user.Address)) {
-                        $result = 'Already present'
-                        $details = "Already a $($role.ToLowerInvariant()); no change."
+                    $present = $roleSet.ContainsKey($user.Address)
+                    if (($removing -and -not $present) -or (-not $removing -and $present)) {
+                        $result = if ($removing) { 'Not present' } else { 'Already present' }
+                        $details = if ($removing) { "Not a $($role.ToLowerInvariant()); no change." }
+                            else { "Already a $($role.ToLowerInvariant()); no change." }
                     }
                     else {
-                        if ($isUnified -and $role -eq 'Owner' -and -not $members.ContainsKey($user.Address)) {
+                        if (-not $removing -and $isUnified -and $role -eq 'Owner' -and -not $members.ContainsKey($user.Address)) {
                             throw 'Ownership was not added because the required membership could not be added. See the Member result.'
+                        }
+                        if ($removing -and $isUnified -and $role -eq 'Member' -and $owners.ContainsKey($user.Address)) {
+                            throw 'Membership was not removed because ownership could not be removed. See the Owner result.'
+                        }
+                        if ($removing -and $role -eq 'Owner' -and $owners.Count -le 1) {
+                            throw 'Cannot remove the last owner. Add another owner first.'
                         }
                         $warnings = @()
                         if ($isUnified) {
                             $linkType = if ($role -eq 'Member') { 'Members' } else { 'Owners' }
-                            $null = Add-UnifiedGroupLinks -Identity $target -LinkType $linkType -Links $user.Address `
+                            if ($removing) {
+                                $null = Remove-UnifiedGroupLinks -Identity $target -LinkType $linkType -Links $user.Address `
+                                    -Confirm:$false -ErrorAction Stop -WarningAction SilentlyContinue -WarningVariable warnings
+                            }
+                            else {
+                                $null = Add-UnifiedGroupLinks -Identity $target -LinkType $linkType -Links $user.Address `
                                 -Confirm:$false -ErrorAction Stop -WarningAction SilentlyContinue -WarningVariable warnings
+                            }
                         }
                         elseif ($role -eq 'Member') {
-                            $null = Add-DistributionGroupMember -Identity $target -Member $user.Address `
+                            if ($removing) {
+                                $null = Remove-DistributionGroupMember -Identity $target -Member $user.Address `
+                                    -BypassSecurityGroupManagerCheck:$BypassManagerCheck -Confirm:$false `
+                                    -ErrorAction Stop -WarningAction SilentlyContinue -WarningVariable warnings
+                            }
+                            else {
+                                $null = Add-DistributionGroupMember -Identity $target -Member $user.Address `
                                 -BypassSecurityGroupManagerCheck:$BypassManagerCheck -Confirm:$false `
                                 -ErrorAction Stop -WarningAction SilentlyContinue -WarningVariable warnings
+                            }
                         }
                         else {
-                            $null = Set-DistributionGroup -Identity $target -ManagedBy @{ Add = $user.Address } `
+                            $ownerChange = if ($removing) { @{ Remove = $user.Address } } else { @{ Add = $user.Address } }
+                            $null = Set-DistributionGroup -Identity $target -ManagedBy $ownerChange `
                                 -BypassSecurityGroupManagerCheck:$BypassManagerCheck -Confirm:$false `
                                 -ErrorAction Stop -WarningAction SilentlyContinue -WarningVariable warnings
                         }
-                        $roleSet[$user.Address] = $true
-                        $details = 'Added.'
+                        if ($removing) { $roleSet.Remove($user.Address) }
+                        else { $roleSet[$user.Address] = $true }
+                        $details = if ($removing) { 'Removed.' } else { 'Added.' }
                         if ($warnings.Count -gt 0) {
                             $result = 'Warning'
                             $details = ($warnings | ForEach-Object { $_.Message }) -join ' '
@@ -277,8 +304,11 @@ $addScript = {
                     $result = 'Failed'
                     $details = $_.Exception.Message
                 }
-                if ($isUnified -and $role -eq 'Member' -and $AddOwner -and -not $AddMember) {
+                if (-not $removing -and $isUnified -and $role -eq 'Member' -and $AddOwner -and -not $AddMember) {
                     $details = "Required for Microsoft 365 ownership. $details"
+                }
+                if ($removing -and $isUnified -and $role -eq 'Owner' -and -not $AddOwner) {
+                    $details = "Checked before Microsoft 365 membership removal. $details"
                 }
                 $results.Add([pscustomobject]@{
                     User = $user.Label; Role = $role; Result = $result; Details = $details
@@ -415,7 +445,7 @@ $xaml = @'
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="Group owners and members" FontSize="20" FontWeight="SemiBold" Foreground="#F2F4F8"/>
                         <TextBlock Margin="0,4,0,0" Foreground="#9AA4B3" TextWrapping="Wrap"
-                                   Text="Add members and/or owners to a distribution list or Microsoft 365 group."/>
+                                   Text="Add or remove members and/or owners on a distribution list or Microsoft 365 group."/>
                     </StackPanel>
                     <Border Grid.Column="1" Background="#20232A" BorderBrush="#343842" BorderThickness="1" CornerRadius="6" Padding="10,7" Margin="12,0,12,0" VerticalAlignment="Center">
                         <TextBlock x:Name="ConnectionStatusText" Text="Not connected" Foreground="#FFB454"/>
@@ -427,7 +457,7 @@ $xaml = @'
                     <TextBox x:Name="GroupTextBox" ToolTip="Exact SMTP address of a static distribution list, mail-enabled security group, or Microsoft 365 group."/>
                 </StackPanel>
                 <StackPanel Margin="0,0,0,12">
-                    <TextBlock Text="Users to add: names or email addresses (one per line, or separated by semicolons)" FontWeight="SemiBold" Foreground="#E9ECF2" Margin="0,0,0,6"/>
+                    <TextBlock Text="Users: names or email addresses (one per line, or separated by semicolons)" FontWeight="SemiBold" Foreground="#E9ECF2" Margin="0,0,0,6"/>
                     <Grid>
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                         <TextBox x:Name="UsersTextBox" Height="70" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
@@ -447,6 +477,8 @@ $xaml = @'
                         </StackPanel>
                         <TextBlock Foreground="#9AA4B3" Margin="0,8,0,0" TextWrapping="Wrap"
                                    Text="Microsoft 365 owners are also added as members. Distribution-list owners are not automatically added as members."/>
+                        <TextBlock Foreground="#9AA4B3" Margin="0,4,0,0" TextWrapping="Wrap"
+                                   Text="Removing Microsoft 365 membership also removes ownership first. Removing only Owner leaves membership unchanged. The last owner cannot be removed."/>
                         <TextBlock x:Name="ValidationText" Foreground="#FF7185" Margin="0,8,0,0" TextWrapping="Wrap" Visibility="Collapsed"/>
                     </StackPanel>
                 </Border>
@@ -491,9 +523,10 @@ $xaml = @'
                 </Grid>
             </Border>
             <Grid Grid.Row="2" Margin="0,14,0,0">
-                <TextBlock VerticalAlignment="Center" Foreground="#858E9C" Text="Changes are applied to Exchange Online immediately."/>
+                <TextBlock VerticalAlignment="Center" Foreground="#858E9C" Text="Changes apply immediately."/>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                     <Button x:Name="CloseButton" Content="Close" Margin="0,0,8,0" Background="#2A2D36" Foreground="#E7EAF0"/>
+                    <Button x:Name="RemoveButton" Content="Remove roles" IsEnabled="False" Margin="0,0,8,0" Background="#FF4568" Foreground="White"/>
                     <Button x:Name="AddButton" Content="Add roles" IsEnabled="False" Background="#1264FF" Foreground="White"/>
                 </StackPanel>
             </Grid>
@@ -526,6 +559,7 @@ $operationProgressBar = $window.FindName('OperationProgressBar')
 $reviewGrid = $window.FindName('ReviewGrid')
 $resultsGrid = $window.FindName('ResultsGrid')
 $addButton = $window.FindName('AddButton')
+$removeButton = $window.FindName('RemoveButton')
 $closeButton = $window.FindName('CloseButton')
 
 function Get-SystemLightTheme {
@@ -608,6 +642,7 @@ function Update-ActionButtons {
     $addButton.IsEnabled = $ready -and $allResolved -and
         ($groupTextBox.Text.Trim() -match $identifierPattern) -and
         ([bool]$memberCheckBox.IsChecked -or [bool]$ownerCheckBox.IsChecked)
+    $removeButton.IsEnabled = $addButton.IsEnabled
 }
 
 function Start-BackgroundOperation {
@@ -697,7 +732,7 @@ $timer.Add_Tick({
             $resultsGrid.Visibility = 'Collapsed'
             $operationProgressBar.Value = 100
             $unresolved = @($rows | Where-Object { $null -eq $_.Selected }).Count
-            $state.Status = if ($unresolved -eq 0) { "All $($rows.Count) user(s) resolved. Review the matches and select Add roles." }
+            $state.Status = if ($unresolved -eq 0) { "All $($rows.Count) user(s) resolved. Review the matches and select Add roles or Remove roles." }
                 else { "$unresolved entry/entries need attention. Choose a match or correct the input and check again." }
         }
         else {
@@ -709,7 +744,7 @@ $timer.Add_Tick({
             $operationProgressBar.Value = 100
             $failed = @($results | Where-Object { $_.Result -eq 'Failed' }).Count
             $warnings = @($results | Where-Object { $_.Result -eq 'Warning' }).Count
-            $state.Status = "Completed: $($results.Count - $failed - $warnings) added or already present, $warnings warning(s), $failed failed."
+            $state.Status = "Completed: $($results.Count - $failed - $warnings) processed or unchanged, $warnings warning(s), $failed failed."
             $icon = if ($failed -gt 0 -or $warnings -gt 0) { [System.Windows.MessageBoxImage]::Warning }
                 else { [System.Windows.MessageBoxImage]::Information }
             [System.Windows.MessageBox]::Show($window,
@@ -755,7 +790,8 @@ $checkUsersButton.Add_Click({
     Start-BackgroundOperation -Operation 'Check users' -Script $resolveScript `
         -Arguments @($entries, $identifierPattern, $ensureConnectionScript)
 })
-$addButton.Add_Click({
+function Invoke-RoleAction {
+    param([ValidateSet('Add', 'Remove')][string]$Action)
     $group = $groupTextBox.Text.Trim()
     $rows = @(Get-ReviewRows)
     $errors = @()
@@ -774,8 +810,17 @@ $addButton.Add_Click({
         if ($ownerCheckBox.IsChecked) { 'Owner' }
     ) -join ' and '
     $users = @($rows | ForEach-Object { $_.Selected } | Group-Object Address | ForEach-Object { $_.Group[0] })
-    $message = "Add $roleText on $group for $($users.Count) user(s)?`n`n$(($users | ForEach-Object { $_.Label }) -join "`n")"
-    if ($ownerCheckBox.IsChecked) {
+    $message = "$Action $roleText on $group for $($users.Count) user(s)?`n`n$(($users | ForEach-Object { $_.Label }) -join "`n")"
+    if ($Action -eq 'Remove') {
+        $message += "`n`nExisting roles will be checked first; absent roles will not be removed. The last owner cannot be removed."
+        if ($memberCheckBox.IsChecked) {
+            $message += "`n`nFor Microsoft 365 groups, this also removes ownership first if a selected user is an owner, even if Owner is not selected."
+        }
+        if ($ownerCheckBox.IsChecked -and -not $memberCheckBox.IsChecked) {
+            $message += "`n`nRemoving only Owner leaves membership unchanged."
+        }
+    }
+    elseif ($ownerCheckBox.IsChecked) {
         $message += "`n`nFor Microsoft 365 groups, missing membership will be added before ownership. Distribution-list ownership does not add membership."
     }
     if ($bypassCheckBox.IsChecked) { $message += "`n`nThe distribution-list group manager check will be bypassed using your admin permissions." }
@@ -784,10 +829,12 @@ $addButton.Add_Click({
         [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Question)
     if ($confirm -ne [System.Windows.MessageBoxResult]::Yes) { return }
     $resultsGrid.ItemsSource = $null
-    Start-BackgroundOperation -Operation 'Add roles' -Script $addScript `
+    Start-BackgroundOperation -Operation "$Action roles" -Script $addScript `
         -Arguments @($group, $users, [bool]$memberCheckBox.IsChecked, [bool]$ownerCheckBox.IsChecked,
-            [bool]$bypassCheckBox.IsChecked, $ensureConnectionScript)
-})
+            [bool]$bypassCheckBox.IsChecked, $ensureConnectionScript, $Action)
+}
+$addButton.Add_Click({ Invoke-RoleAction -Action Add })
+$removeButton.Add_Click({ Invoke-RoleAction -Action Remove })
 $window.Add_Closing({
     param($windowSender, $windowEventArgs)
     if ($state.Busy) {

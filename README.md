@@ -9,7 +9,7 @@ and group administration.
 | --- | --- | --- |
 | [`Export-ExpandedDistributionGroupMembers.ps1`](Export-ExpandedDistributionGroupMembers.ps1) | Expand nested groups, evaluate dynamic groups, and export Microsoft 365 group members and owners. | Read-only |
 | [`Add-SharedMailboxPermission.ps1`](Add-SharedMailboxPermission.ps1) | Resolve users by name or email, then grant Full Access, Send As, or both on a shared mailbox. | Adds permissions |
-| [`Add-GroupOwnerOrMember.ps1`](Add-GroupOwnerOrMember.ps1) | Resolve users by name or email, then add members, owners, or both to a distribution list or Microsoft 365 group. | Adds group roles |
+| [`Add-GroupOwnerOrMember.ps1`](Add-GroupOwnerOrMember.ps1) | Resolve users by name or email, then add or remove members, owners, or both on a distribution list or Microsoft 365 group. | Adds or removes group roles |
 
 ## Requirements
 
@@ -87,9 +87,9 @@ This is a standalone tool with the same interface and connection workflow as the
 shared mailbox permission manager; it does not depend on either existing script.
 Enter one group email address and one or more user names or email addresses.
 Select **Check users**, choose a specific match for ambiguous names, then select
-**Member**, **Owner**, or both and **Add roles**. Only user mailboxes are offered,
+**Member**, **Owner**, or both and **Add roles** or **Remove roles**. Only user mailboxes are offered,
 matching the mailbox permission manager's user lookup; guests, contacts, and
-nested groups are not offered as users to add.
+nested groups are not offered as users to manage.
 
 The tool detects static distribution lists, mail-enabled security groups, and
 Microsoft 365 groups automatically. Dynamic groups and other recipient types
@@ -103,14 +103,25 @@ does not imply membership; select both roles if both are needed. Existing owners
 and members are preserved, and existing assignments are reported as **Already
 present** rather than added again.
 
+For removal, existing assignments are read before any changes. Absent roles are
+reported as **Not present** without issuing a removal command. When removing
+Microsoft 365 membership, the confirmation explicitly explains that existing
+ownership will also be removed first, even if **Owner** is not selected. If
+ownership removal fails, membership is not removed. Removing only **Owner**
+leaves membership unchanged. Distribution-list roles are independent: only the
+selected roles are removed, and other members and owners are preserved. The
+last owner cannot be removed; add another owner first.
+
 Every write requires confirmation. Results and Exchange warnings are shown per
 user and role. Successful changes are not rolled back if another change fails;
 for example, membership remains if a subsequent ownership change fails.
+Likewise, ownership stays removed if a subsequent membership removal fails.
 
 The signed-in account needs permission to run `Get-EXORecipient`, `Get-Recipient`,
 `Get-DistributionGroup`, `Get-DistributionGroupMember`, `Get-UnifiedGroup`,
 `Get-UnifiedGroupLinks`, `Add-DistributionGroupMember`, `Set-DistributionGroup`,
-and `Add-UnifiedGroupLinks`. For distribution lists you do not own, select
+`Add-UnifiedGroupLinks`, `Remove-DistributionGroupMember`, and
+`Remove-UnifiedGroupLinks`. For distribution lists you do not own, select
 **Admin override (distribution lists only)** only when your account has
 **Organization Management** or the **Security Group Creation and Membership**
 role. This explicitly uses `BypassSecurityGroupManagerCheck`; it does not grant

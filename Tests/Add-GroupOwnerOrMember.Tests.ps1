@@ -62,6 +62,16 @@ function Set-DistributionGroup {
     param($Identity, $ManagedBy, [switch]$BypassSecurityGroupManagerCheck)
     if ($PSCmdlet.ShouldProcess($Identity, 'Test stub')) { throw 'Exchange command must be mocked.' }
 }
+function Remove-UnifiedGroupLinks {
+    [CmdletBinding(SupportsShouldProcess)]
+    param($Identity, $LinkType, $Links)
+    if ($PSCmdlet.ShouldProcess($Identity, 'Test stub')) { throw 'Exchange command must be mocked.' }
+}
+function Remove-DistributionGroupMember {
+    [CmdletBinding(SupportsShouldProcess)]
+    param($Identity, $Member, [switch]$BypassSecurityGroupManagerCheck)
+    if ($PSCmdlet.ShouldProcess($Identity, 'Test stub')) { throw 'Exchange command must be mocked.' }
+}
 
 Describe 'Standalone group tool' {
     BeforeEach {
@@ -76,6 +86,7 @@ Describe 'Standalone group tool' {
         $script:failReads = $false
         $script:warnOnWrite = $false
         $script:failAddress = ''
+        $script:dlOwners = @('existing-owner')
         $script:calls = [System.Collections.Generic.List[string]]::new()
         Mock Get-Recipient {
             if ($Identity -eq 'existing-owner') {
@@ -84,7 +95,7 @@ Describe 'Standalone group tool' {
             [pscustomobject]@{ PrimarySmtpAddress = 'team@example.com'; RecipientTypeDetails = $script:groupType }
         }
         Mock Get-UnifiedGroup { [pscustomobject]@{ IsDirSynced = $script:synced } }
-        Mock Get-DistributionGroup { [pscustomobject]@{ IsDirSynced = $script:synced; ManagedBy = @('existing-owner') } }
+        Mock Get-DistributionGroup { [pscustomobject]@{ IsDirSynced = $script:synced; ManagedBy = $script:dlOwners } }
         Mock Get-UnifiedGroupLinks {
             if ($script:failReads) { throw 'Read denied' }
             if ($LinkType -eq 'Members') { $script:members } else { $script:owners }
@@ -98,7 +109,150 @@ Describe 'Standalone group tool' {
             $script:calls.Add("$LinkType`:$Links")
         }
         Mock Add-DistributionGroupMember { $script:calls.Add("Member:$Member") }
-        Mock Set-DistributionGroup { $script:calls.Add("Owner:$($ManagedBy.Add)") }
+        Mock Set-DistributionGroup {
+            if ($ManagedBy.ContainsKey('Remove')) { $script:calls.Add("RemoveOwner:$($ManagedBy.Remove)") }
+            else { $script:calls.Add("Owner:$($ManagedBy.Add)") }
+        }
+        Mock Remove-UnifiedGroupLinks {
+            if ($script:failReads) { throw 'Read denied' }
+            if ($script:failOwner -and $LinkType -eq 'Owners') { throw 'Ownership denied' }
+            if ($script:failMember -and $LinkType -eq 'Members') { throw 'Membership denied' }
+            if ($script:warnOnWrite) { Write-Warning 'Review this removal' }
+            $script:calls.Add("Remove$LinkType`:$Links")
+        }
+        Mock Remove-DistributionGroupMember { $script:calls.Add("RemoveMember:$Member") }
+    }
+
+    It 'skips absent roles without issuing removal commands' {
+        & $script:addRoles $script:state 'team@example.com' @($script:user) $true $true $false {} Remove
+        $script:state.Error | Should BeNullOrEmpty
+        @($script:state.Results | Where-Object Result -eq 'Not present').Count | Should Be 2
+        $script:calls.Count | Should Be 0
+        Assert-MockCalled Remove-UnifiedGroupLinks -Times 0 -Exactly -Scope It
+    }
+
+    It 'removes M365 ownership before membership even when only Member is selected' {
+        $script:members = @([pscustomobject]@{ PrimarySmtpAddress = 'jane@example.com' })
+        $script:owners = @(
+            [pscustomobject]@{ PrimarySmtpAddress = 'JANE@example.com' }
+            [pscustomobject]@{ PrimarySmtpAddress = 'other@example.com' }
+        )
+        & $script:addRoles $script:state 'team@example.com' @($script:user) $true $false $false {} Remove
+        ($script:calls -join ',') | Should Be 'RemoveOwners:jane@example.com,RemoveMembers:jane@example.com'
+        $script:state.Results[0].Role | Should Be 'Owner'
+        $script:state.Results[0].Details | Should Match 'Checked before'
+        $script:state.Results[1].Details | Should Be 'Removed.'
+        $script:state.Percent | Should Be 100
+    }
+
+    It 'removes membership for a non-owner without an owner write' {
+        $script:members = @([pscustomobject]@{ PrimarySmtpAddress = 'jane@example.com' })
+        & $script:addRoles $script:state 'team@example.com' @($script:user) $true $false $false {} Remove
+        ($script:calls -join ',') | Should Be 'RemoveMembers:jane@example.com'
+        $script:state.Results[0].Result | Should Be 'Not present'
+    }
+
+    It 'leaves membership unchanged when only Owner is removed' {
+        $script:owners = @(
+            [pscustomobject]@{ PrimarySmtpAddress = 'jane@example.com' }
+            [pscustomobject]@{ PrimarySmtpAddress = 'other@example.com' }
+        )
+        & $script:addRoles $script:state 'team@example.com' @($script:user) $false $true $false {} Remove
+        ($script:calls -join ',') | Should Be 'RemoveOwners:jane@example.com'
+        $script:state.Results.Count | Should Be 1
+        Assert-MockCalled Get-UnifiedGroupLinks -Times 0 -Exactly -Scope It -ParameterFilter { $LinkType -eq 'Members' }
+    }
+
+    It 'blocks membership removal when prerequisite ownership removal fails' {
+        $script:members = @([pscustomobject]@{ PrimarySmtpAddress = 'jane@example.com' })
+        $script:owners = @(
+            [pscustomobject]@{ PrimarySmtpAddress = 'jane@example.com' }
+            [pscustomobject]@{ PrimarySmtpAddress = 'other@example.com' }
+        )
+        $script:failOwner = $true
+        & $script:addRoles $script:state 'team@example.com' @($script:user) $true $false $false {} Remove
+        $script:state.Results[0].Result | Should Be 'Failed'
+        $script:state.Results[1].Details | Should Match 'ownership could not be removed'
+        Assert-MockCalled Remove-UnifiedGroupLinks -Times 0 -Exactly -Scope It -ParameterFilter { $LinkType -eq 'Members' }
+    }
+
+    It 'preserves the last owner and its membership' {
+        $script:members = @([pscustomobject]@{ PrimarySmtpAddress = 'jane@example.com' })
+        $script:owners = $script:members
+        & $script:addRoles $script:state 'team@example.com' @($script:user) $true $true $false {} Remove
+        $script:state.Results[0].Details | Should Match 'last owner'
+        $script:state.Results[1].Result | Should Be 'Failed'
+        $script:calls.Count | Should Be 0
+    }
+
+    It 'keeps the final owner when multiple owners are selected for removal' {
+        $second = [pscustomobject]@{ Address = 'other@example.com'; Label = 'Other' }
+        $script:owners = @(
+            [pscustomobject]@{ PrimarySmtpAddress = 'jane@example.com' }
+            [pscustomobject]@{ PrimarySmtpAddress = 'other@example.com' }
+        )
+        & $script:addRoles $script:state 'team@example.com' @($script:user, $second) $false $true $false {} Remove
+        $script:state.Results[0].Result | Should Be 'Success'
+        $script:state.Results[1].Details | Should Match 'last owner'
+        $script:calls.Count | Should Be 1
+    }
+
+    It 'removes DL membership with explicit admin override' {
+        $script:groupType = 'MailUniversalDistributionGroup'
+        $script:members = @([pscustomobject]@{ PrimarySmtpAddress = 'jane@example.com' })
+        & $script:addRoles $script:state 'team@example.com' @($script:user) $true $false $true {} Remove
+        ($script:calls -join ',') | Should Be 'RemoveMember:jane@example.com'
+        Assert-MockCalled Remove-DistributionGroupMember -Times 1 -Exactly -Scope It -ParameterFilter { $BypassSecurityGroupManagerCheck }
+        Assert-MockCalled Set-DistributionGroup -Times 0 -Exactly -Scope It
+    }
+
+    It 'uses a subtractive DL owner update without touching membership or other owners' {
+        $script:groupType = 'MailUniversalSecurityGroup'
+        $script:dlOwners = @('existing-owner', 'team@example.com')
+        $script:user = [pscustomobject]@{ Address = 'existing@example.com'; Label = 'Existing' }
+        & $script:addRoles $script:state 'team@example.com' @($script:user) $false $true $true {} Remove
+        $script:state.Error | Should BeNullOrEmpty
+        ($script:calls -join ',') | Should Be 'RemoveOwner:existing@example.com'
+        Assert-MockCalled Set-DistributionGroup -Times 1 -Exactly -Scope It -ParameterFilter {
+            $ManagedBy.Count -eq 1 -and $ManagedBy.Remove -eq 'existing@example.com' -and $BypassSecurityGroupManagerCheck
+        }
+        Assert-MockCalled Remove-DistributionGroupMember -Times 0 -Exactly -Scope It
+    }
+
+    It 'blocks removal of the last DL owner' {
+        $script:groupType = 'MailUniversalDistributionGroup'
+        $script:user = [pscustomobject]@{ Address = 'existing@example.com'; Label = 'Existing' }
+        & $script:addRoles $script:state 'team@example.com' @($script:user) $false $true $false {} Remove
+        $script:state.Results[0].Details | Should Match 'last owner'
+        $script:calls.Count | Should Be 0
+    }
+
+    It 'does not remove anything if the existing role lookup fails' {
+        $script:failReads = $true
+        & $script:addRoles $script:state 'team@example.com' @($script:user) $true $true $false {} Remove
+        $script:state.Error | Should Be 'Read denied'
+        $script:calls.Count | Should Be 0
+    }
+
+    It 'reports partial removal failures without rolling back successful removals' {
+        $script:members = @([pscustomobject]@{ PrimarySmtpAddress = 'jane@example.com' })
+        $script:owners = @(
+            [pscustomobject]@{ PrimarySmtpAddress = 'jane@example.com' }
+            [pscustomobject]@{ PrimarySmtpAddress = 'other@example.com' }
+        )
+        $script:failMember = $true
+        & $script:addRoles $script:state 'team@example.com' @($script:user) $true $true $false {} Remove
+        $script:state.Results[0].Result | Should Be 'Success'
+        $script:state.Results[1].Result | Should Be 'Failed'
+        ($script:calls -join ',') | Should Be 'RemoveOwners:jane@example.com'
+    }
+
+    It 'surfaces removal warnings' {
+        $script:members = @([pscustomobject]@{ PrimarySmtpAddress = 'jane@example.com' })
+        $script:warnOnWrite = $true
+        & $script:addRoles $script:state 'team@example.com' @($script:user) $true $false $false {} Remove
+        $script:state.Results[1].Result | Should Be 'Warning'
+        $script:state.Results[1].Details | Should Match 'Review this removal'
     }
 
     It 'adds required M365 membership before ownership and reports both roles' {
@@ -309,6 +463,7 @@ Describe 'Standalone group tool' {
             $window.FindName('OwnerCheckBox').IsChecked | Should Be $false
             $window.FindName('BypassCheckBox').IsChecked | Should Be $false
             $window.FindName('AddButton').IsEnabled | Should Be $false
+            $window.FindName('RemoveButton').IsEnabled | Should Be $false
             $themeAssignment = $script:groupAst.Find({
                 param($node)
                 $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$lightThemeColors'
