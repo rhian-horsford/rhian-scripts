@@ -9,10 +9,11 @@ and group administration.
 | --- | --- | --- |
 | [`Export-ExpandedDistributionGroupMembers.ps1`](Export-ExpandedDistributionGroupMembers.ps1) | Expand nested groups, evaluate dynamic groups, and export Microsoft 365 group members and owners. | Read-only |
 | [`Add-SharedMailboxPermission.ps1`](Add-SharedMailboxPermission.ps1) | Resolve users by name or email, then grant Full Access, Send As, or both on a shared mailbox. | Adds permissions |
+| [`Add-GroupOwnerOrMember.ps1`](Add-GroupOwnerOrMember.ps1) | Resolve users by name or email, then add members, owners, or both to a distribution list or Microsoft 365 group. | Adds group roles |
 
 ## Requirements
 
-Both tools use a GUI and require PowerShell 7.6 or later with
+All tools use a GUI and require PowerShell 7.6 or later with
 ExchangeOnlineManagement 3.7 or later. ExchangeOnlineManagement 3.10.x also
 requires PowerShell 7.6 or later. The GUIs follow Windows light/dark appearance
 and update their colors while open.
@@ -30,6 +31,7 @@ From the VS Code PowerShell terminal, launch a tool with:
 ```powershell
 & .\Export-ExpandedDistributionGroupMembers.ps1
 & .\Add-SharedMailboxPermission.ps1
+& .\Add-GroupOwnerOrMember.ps1
 ```
 
 Review scripts before running them. Do not weaken the machine execution policy
@@ -79,3 +81,54 @@ The signed-in account needs Exchange RBAC permission to run
 **Recipient Management** or an equivalent custom role. Permission changes are
 applied immediately; use a test mailbox when validating the workflow.
 
+## Add-GroupOwnerOrMember
+
+This is a standalone tool with the same interface and connection workflow as the
+shared mailbox permission manager; it does not depend on either existing script.
+Enter one group email address and one or more user names or email addresses.
+Select **Check users**, choose a specific match for ambiguous names, then select
+**Member**, **Owner**, or both and **Add roles**. Only user mailboxes are offered,
+matching the mailbox permission manager's user lookup; guests, contacts, and
+nested groups are not offered as users to add.
+
+The tool detects static distribution lists, mail-enabled security groups, and
+Microsoft 365 groups automatically. Dynamic groups and other recipient types
+are rejected. Groups synchronized from on-premises must be changed in their
+source directory.
+
+For Microsoft 365 groups, adding an owner also adds missing membership first,
+even if only **Owner** was selected. Both results appear in the table. If
+membership fails, ownership is not attempted. For distribution lists, ownership
+does not imply membership; select both roles if both are needed. Existing owners
+and members are preserved, and existing assignments are reported as **Already
+present** rather than added again.
+
+Every write requires confirmation. Results and Exchange warnings are shown per
+user and role. Successful changes are not rolled back if another change fails;
+for example, membership remains if a subsequent ownership change fails.
+
+The signed-in account needs permission to run `Get-EXORecipient`, `Get-Recipient`,
+`Get-DistributionGroup`, `Get-DistributionGroupMember`, `Get-UnifiedGroup`,
+`Get-UnifiedGroupLinks`, `Add-DistributionGroupMember`, `Set-DistributionGroup`,
+and `Add-UnifiedGroupLinks`. For distribution lists you do not own, select
+**Admin override (distribution lists only)** only when your account has
+**Organization Management** or the **Security Group Creation and Membership**
+role. This explicitly uses `BypassSecurityGroupManagerCheck`; it does not grant
+additional permissions or affect Microsoft 365 groups.
+
+Changes are applied immediately. Use a test group to validate the authenticated
+workflow before making production changes.
+
+### Offline validation
+
+The group tool's tests use mocked Exchange commands and load the WPF markup
+without signing in or making tenant changes. On Windows, run them in PowerShell
+7.6 or later with the Windows-bundled Pester 3.4.0:
+
+```powershell
+Import-Module Pester -RequiredVersion 3.4.0
+Invoke-Pester -Script .\Tests\Add-GroupOwnerOrMember.Tests.ps1
+```
+
+These tests do not replace validation of sign-in and Exchange RBAC with a test
+group.
