@@ -86,7 +86,12 @@ applied immediately; use a test mailbox when validating the workflow.
 This is a standalone tool with the same interface and connection workflow as the
 shared mailbox permission manager; it does not depend on either existing script.
 Enter one group email address and one or more user names or email addresses.
-Select **Check users**, choose a specific match for ambiguous names, then select
+Use **Import CSV...** to load recipients from a CSV with a `PrimarySmtpAddress`,
+`EmailAddress`, `Email`, `UserPrincipalName`, or `UPN` column. Imported addresses
+are merged with the entries already typed and deduplicated. The export tool's
+CSV can be imported directly; choose the roles to add or remove in this tool,
+then select **Check users** and choose a specific match for ambiguous names.
+Then select
 **Member**, **Owner**, or both and **Add roles** or **Remove roles**. Only user mailboxes are offered,
 matching the mailbox permission manager's user lookup; guests, contacts, and
 nested groups are not offered as users to manage.

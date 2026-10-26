@@ -540,6 +540,21 @@ $expandScript = {
             })
         }
 
+        function Add-GroupOwners {
+            param([object]$Group, [string]$SourceGroup, [string]$SourceGroupType)
+            foreach ($ownerIdentity in @($Group.ManagedBy)) {
+                if (-not $ownerIdentity) { continue }
+                try {
+                    $owner = Get-Recipient -Identity $ownerIdentity.ToString() -ErrorAction Stop
+                    Add-ExpandedRecipient -Recipient $owner -SourceGroup $SourceGroup `
+                        -SourceGroupType $SourceGroupType -MembershipType 'Owner'
+                }
+                catch {
+                    $script:ExpansionWarnings.Add("Could not resolve an owner of '$SourceGroup': $($_.Exception.Message)")
+                }
+            }
+        }
+
         function Expand-MailGroup {
             param([string]$GroupIdentity)
             $m365Group = Get-UnifiedGroup -Identity $GroupIdentity -ErrorAction SilentlyContinue
@@ -573,6 +588,8 @@ $expandScript = {
                 if ($script:ProcessedGroups.ContainsKey($groupKey)) { return }
                 $script:ProcessedGroups[$groupKey] = $true
                 $State.Status = "Evaluating dynamic group $($dynamicGroup.DisplayName)..."
+                Add-GroupOwners -Group $dynamicGroup -SourceGroup $dynamicGroup.DisplayName `
+                    -SourceGroupType 'Dynamic Distribution Group'
                 try {
                     # Exchange evaluates the dynamic group's saved OPATH filter at export time.
                     $query = @{
@@ -603,6 +620,8 @@ $expandScript = {
             if ($script:ProcessedGroups.ContainsKey($groupKey)) { return }
             $script:ProcessedGroups[$groupKey] = $true
             $State.Status = "Expanding group $($regularGroup.DisplayName)..."
+            Add-GroupOwners -Group $regularGroup -SourceGroup $regularGroup.DisplayName `
+                -SourceGroupType ([string]$regularGroup.RecipientTypeDetails)
 
             try {
                 $members = @(Get-DistributionGroupMember -Identity $regularGroup.Identity -ResultSize Unlimited -ErrorAction Stop)
@@ -624,7 +643,7 @@ $expandScript = {
                 }
                 else {
                     Add-ExpandedRecipient -Recipient $member -SourceGroup $regularGroup.DisplayName `
-                        -SourceGroupType ([string]$regularGroup.RecipientTypeDetails) -MembershipType 'Direct / Exception'
+                        -SourceGroupType ([string]$regularGroup.RecipientTypeDetails) -MembershipType 'Member'
                 }
             }
         }

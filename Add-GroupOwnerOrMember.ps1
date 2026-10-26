@@ -462,8 +462,12 @@ $xaml = @'
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                         <TextBox x:Name="UsersTextBox" Height="70" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                                  ToolTip="Full or partial names (e.g. 'Jane Smith', 'Smith, Jane') or exact email addresses of user mailboxes. Wildcards are not allowed."/>
-                        <Button x:Name="CheckUsersButton" Grid.Column="1" Content="Check users" VerticalAlignment="Top" Margin="10,0,0,0"
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="10,0,0,0">
+                            <Button x:Name="ImportCsvButton" Content="Import CSV..." VerticalAlignment="Top"
+                                Background="#2A2D36" Foreground="#E7EAF0"/>
+                            <Button x:Name="CheckUsersButton" Content="Check users" VerticalAlignment="Top" Margin="8,0,0,0"
                                 IsEnabled="False" Background="#2A2D36" Foreground="#E7EAF0"/>
+                        </StackPanel>
                     </Grid>
                 </StackPanel>
                 <Border Background="#1E2027" BorderBrush="#2B2F38" BorderThickness="1" CornerRadius="8" Padding="10">
@@ -549,6 +553,7 @@ $connectButton = $window.FindName('ConnectButton')
 $connectionStatusText = $window.FindName('ConnectionStatusText')
 $groupTextBox = $window.FindName('GroupTextBox')
 $usersTextBox = $window.FindName('UsersTextBox')
+$importCsvButton = $window.FindName('ImportCsvButton')
 $checkUsersButton = $window.FindName('CheckUsersButton')
 $memberCheckBox = $window.FindName('MemberCheckBox')
 $ownerCheckBox = $window.FindName('OwnerCheckBox')
@@ -623,13 +628,31 @@ function Get-UserEntries {
         Where-Object { $_ } | Sort-Object -Unique)
 }
 
+function Get-CsvUserEntries {
+    param([string]$Path)
+    $records = @(Import-Csv -LiteralPath $Path -ErrorAction Stop)
+    if ($records.Count -eq 0) { throw 'The CSV does not contain any recipient rows.' }
+
+    $columns = @($records[0].PSObject.Properties.Name)
+    $identityColumn = @('PrimarySmtpAddress', 'EmailAddress', 'Email', 'UserPrincipalName', 'UPN') |
+        Where-Object { $columns -contains $_ } | Select-Object -First 1
+    if (-not $identityColumn) {
+        throw 'The CSV must contain a PrimarySmtpAddress, EmailAddress, Email, UserPrincipalName, or UPN column.'
+    }
+
+    $entries = @($records | ForEach-Object { [string]$_.PSObject.Properties[$identityColumn].Value } |
+        ForEach-Object { $_.Trim() } | Where-Object { $_ } | Sort-Object -Unique)
+    if ($entries.Count -eq 0) { throw "The CSV column '$identityColumn' contains no email addresses." }
+    return $entries
+}
+
 function Get-ReviewRows {
     if ($reviewGrid.ItemsSource) { @($reviewGrid.ItemsSource) } else { @() }
 }
 
 function Set-InputsEnabled {
     param([bool]$Enabled)
-    foreach ($control in @($connectButton, $groupTextBox, $usersTextBox, $memberCheckBox, $ownerCheckBox, $bypassCheckBox, $reviewGrid)) {
+    foreach ($control in @($connectButton, $groupTextBox, $usersTextBox, $importCsvButton, $memberCheckBox, $ownerCheckBox, $bypassCheckBox, $reviewGrid)) {
         $control.IsEnabled = $Enabled
     }
 }
@@ -770,6 +793,22 @@ $usersTextBox.Add_TextChanged({
     $validationText.Visibility = 'Collapsed'
     $reviewGrid.ItemsSource = $null
     Update-ActionButtons
+})
+$importCsvButton.Add_Click({
+    $dialog = [Microsoft.Win32.OpenFileDialog]::new()
+    $dialog.Title = 'Import recipients from CSV'
+    $dialog.Filter = 'CSV files (*.csv)|*.csv|All files (*.*)|*.*'
+    $dialog.Multiselect = $false
+    if ($dialog.ShowDialog($window) -ne $true) { return }
+
+    try {
+        $importedEntries = @(Get-CsvUserEntries -Path $dialog.FileName)
+        $combinedEntries = @(@(Get-UserEntries) + $importedEntries | Sort-Object -Unique)
+        $usersTextBox.Text = $combinedEntries -join [Environment]::NewLine
+        $state.Status = "Imported $($importedEntries.Count) unique address(es). Select Check users to resolve them."
+        $operationStatusText.Text = $state.Status
+    }
+    catch { Show-ErrorDialog -Title 'CSV import failed' -Message $_.Exception.Message }
 })
 $reviewGrid.AddHandler(
     [System.Windows.Controls.Primitives.Selector]::SelectionChangedEvent,

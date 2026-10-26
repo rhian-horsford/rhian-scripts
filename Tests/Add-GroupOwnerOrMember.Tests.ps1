@@ -21,6 +21,10 @@ function Get-AssignedExpression {
 $script:addRoles = (Get-AssignedExpression 'addScript').ScriptBlock.GetScriptBlock()
 $script:resolveUsers = (Get-AssignedExpression 'resolveScript').ScriptBlock.GetScriptBlock()
 $script:emailPattern = (Get-AssignedExpression 'identifierPattern').Value
+$script:importCsvUsers = $script:groupAst.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-CsvUserEntries'
+}, $true).Body.GetScriptBlock()
 
 # Local command signatures allow mocking without ExchangeOnlineManagement or a tenant.
 function Get-Recipient {
@@ -435,6 +439,32 @@ Describe 'Standalone group tool' {
         $entries = @(& $function.Body.GetScriptBlock())
         $entries.Count | Should Be 2
         ($entries -contains 'Smith, Jane') | Should Be $true
+    }
+
+    It 'imports and deduplicates PrimarySmtpAddress values from the exporter CSV' {
+        $path = Join-Path ([System.IO.Path]::GetTempPath()) "$([guid]::NewGuid().ToString('N')).csv"
+        @(
+            'DisplayName,PrimarySmtpAddress,MembershipTypes'
+            'Jane Smith,jane@example.com,Member'
+            'Jane Smith,jane@example.com,Owner'
+            'John Jones,john@example.com,Member'
+        ) | Set-Content -LiteralPath $path -Encoding utf8
+        try {
+            $entries = @(& $script:importCsvUsers -Path $path)
+            $entries.Count | Should Be 2
+            ($entries -contains 'jane@example.com') | Should Be $true
+            ($entries -contains 'john@example.com') | Should Be $true
+        }
+        finally { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+    }
+
+    It 'rejects CSV files without a supported email column' {
+        $path = Join-Path ([System.IO.Path]::GetTempPath()) "$([guid]::NewGuid().ToString('N')).csv"
+        @('DisplayName,Department', 'Jane,Sales') | Set-Content -LiteralPath $path -Encoding utf8
+        try {
+            { & $script:importCsvUsers -Path $path } | Should Throw
+        }
+        finally { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
     }
 
     It 'loads the themed WPF window and all named controls without connecting' {

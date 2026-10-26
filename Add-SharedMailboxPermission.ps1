@@ -197,7 +197,7 @@ $xaml = @'
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="Shared mailbox permissions" FontSize="20" FontWeight="SemiBold" Foreground="#F2F4F8"/>
                 <TextBlock Margin="0,4,0,0" Foreground="#9AA4B3" TextWrapping="Wrap"
-                           Text="Grant Full Access and/or Send As permissions on a shared mailbox to one or more users."/>
+                           Text="Grant or remove Full Access and/or Send As permissions on a shared mailbox."/>
             </StackPanel>
             <Border Grid.Column="1" Background="#20232A" BorderBrush="#343842" BorderThickness="1" CornerRadius="6" Padding="10,7" Margin="12,0,12,0" VerticalAlignment="Center">
                 <TextBlock x:Name="ConnectionStatusText" Text="Not connected" Foreground="#FFB454"/>
@@ -211,7 +211,7 @@ $xaml = @'
         </StackPanel>
 
         <StackPanel Margin="0,0,0,12">
-            <TextBlock Text="Users to add: names or email addresses (one per line, or separated by semicolons)" FontWeight="SemiBold" Foreground="#E9ECF2" Margin="0,0,0,6"/>
+            <TextBlock Text="Users: names or email addresses (one per line, or separated by semicolons)" FontWeight="SemiBold" Foreground="#E9ECF2" Margin="0,0,0,6"/>
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -230,8 +230,10 @@ $xaml = @'
                 <StackPanel Orientation="Horizontal">
                     <CheckBox x:Name="FullAccessCheckBox" Content="Full Access" IsChecked="True"/>
                     <CheckBox x:Name="SendAsCheckBox" Content="Send As"/>
-                    <CheckBox x:Name="AutoMappingCheckBox" Content="Auto-map mailbox in Outlook (Full Access only)" IsChecked="True"/>
+                    <CheckBox x:Name="AutoMappingCheckBox" Content="Auto-map in Outlook (adding Full Access only)" IsChecked="True"/>
                 </StackPanel>
+                <TextBlock Foreground="#9AA4B3" Margin="0,8,0,0" TextWrapping="Wrap"
+                           Text="Removal checks direct permissions first. Inherited or group-based access is not removed. Auto-mapping applies only when adding."/>
                 <TextBlock x:Name="ValidationText" Foreground="#FF7185" Margin="0,8,0,0" TextWrapping="Wrap" Visibility="Collapsed"/>
             </StackPanel>
         </Border>
@@ -284,9 +286,10 @@ $xaml = @'
         </Border>
 
         <Grid Grid.Row="2" Margin="0,14,0,0">
-            <TextBlock VerticalAlignment="Center" Foreground="#858E9C" Text="Changes are applied to Exchange Online immediately."/>
+            <TextBlock VerticalAlignment="Center" Foreground="#858E9C" Text="Changes apply immediately."/>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                 <Button x:Name="CloseButton" Content="Close" Margin="0,0,8,0" Background="#2A2D36" Foreground="#E7EAF0"/>
+                <Button x:Name="RemoveButton" Content="Remove permissions" IsEnabled="False" Margin="0,0,8,0" Background="#FF4568" Foreground="White"/>
                 <Button x:Name="AddButton" Content="Add permissions" IsEnabled="False" Background="#1264FF" Foreground="White"/>
             </StackPanel>
         </Grid>
@@ -322,6 +325,7 @@ $operationStatusText = $window.FindName('OperationStatusText')
 $operationProgressBar = $window.FindName('OperationProgressBar')
 $resultsGrid = $window.FindName('ResultsGrid')
 $addButton = $window.FindName('AddButton')
+$removeButton = $window.FindName('RemoveButton')
 $closeButton = $window.FindName('CloseButton')
 $script:window = $window
 $script:connectionStatusText = $connectionStatusText
@@ -436,11 +440,12 @@ function Update-ActionButtons {
     $ready = $state.Connected -and -not $state.Busy
     $checkUsersButton.IsEnabled = $ready -and -not [string]::IsNullOrWhiteSpace($usersTextBox.Text)
 
-    $rows = Get-ReviewRows
+    $rows = @(Get-ReviewRows)
     $allResolved = $rows.Count -gt 0 -and @($rows | Where-Object { $null -eq $_.Selected }).Count -eq 0
     $addButton.IsEnabled = $ready -and $allResolved -and
         -not [string]::IsNullOrWhiteSpace($mailboxTextBox.Text) -and
         ([bool]$fullAccessCheckBox.IsChecked -or [bool]$sendAsCheckBox.IsChecked)
+    $removeButton.IsEnabled = $addButton.IsEnabled
 }
 
 function Start-BackgroundOperation {
@@ -469,6 +474,7 @@ function Start-BackgroundOperation {
 
     Set-InputsEnabled -Enabled $false
     $addButton.IsEnabled = $false
+    $removeButton.IsEnabled = $false
     $checkUsersButton.IsEnabled = $false
     $operationProgressBar.IsIndeterminate = ($Operation -eq 'Connect')
     if ($Operation -eq 'Connect') {
@@ -546,12 +552,10 @@ $timer.Add_Tick({
             $operationProgressBar.Value = 100
             $unresolved = @($rows | Where-Object { $null -eq $_.Selected }).Count
             $operationStatusText.Text = if ($unresolved -eq 0) {
-                $connectionStatusText.Text = if ([string]$state.Error -eq 'Sign-in cancelled.') { 'Sign-in cancelled' } else { 'Not connected' }
+                "All $($rows.Count) user(s) resolved. Review the matches and select Add permissions or Remove permissions."
             }
             else {
-            if ([string]$state.Error -ne 'Sign-in cancelled.') {
-                Show-ErrorDialog -Title "$completedOperation failed" -Message ([string]$state.Error)
-            }
+                "$unresolved entry/entries need attention. Choose a match or correct the input and check again."
             }
         }
         else {
@@ -562,11 +566,12 @@ $timer.Add_Tick({
             $resultsGrid.ItemsSource = $results
             $operationProgressBar.Value = 100
             $failed = @($results | Where-Object { $_.Result -eq 'Failed' }).Count
-            $operationStatusText.Text = "Completed: $($results.Count - $failed) succeeded, $failed failed."
-            $icon = if ($failed -gt 0) { [System.Windows.MessageBoxImage]::Warning } else { [System.Windows.MessageBoxImage]::Information }
+            $warnings = @($results | Where-Object { $_.Result -eq 'Warning' }).Count
+            $operationStatusText.Text = "Completed: $($results.Count - $failed - $warnings) processed or unchanged, $warnings warning(s), $failed failed."
+            $icon = if ($failed -gt 0 -or $warnings -gt 0) { [System.Windows.MessageBoxImage]::Warning } else { [System.Windows.MessageBoxImage]::Information }
             [System.Windows.MessageBox]::Show(
                 $window,
-                "Permissions processed.`n`nSucceeded: $($results.Count - $failed)`nFailed: $failed`n`nSee the results table for details.",
+                "$($operationStatusText.Text)`n`nSee the results table for details. Successful changes are not rolled back if another permission fails.",
                 'Operation complete',
                 [System.Windows.MessageBoxButton]::OK,
                 $icon
@@ -760,9 +765,13 @@ $resolveScript = {
 }
 
 $addScript = {
-    param($State, $Mailbox, $Trustees, $GrantFullAccess, $GrantSendAs, $AutoMapping, $EnsureConnection)
+    param($State, $Mailbox, $Trustees, $GrantFullAccess, $GrantSendAs, $AutoMapping, $EnsureConnection,
+        [ValidateSet('Add', 'Remove')][string]$Action = 'Add')
     try {
         & $EnsureConnection $State
+        if (-not ($GrantFullAccess -or $GrantSendAs) -or $Trustees.Count -eq 0) {
+            throw 'Select at least one permission and resolve at least one user.'
+        }
         $sharedMailbox = Get-EXOMailbox -Identity $Mailbox -Properties RecipientTypeDetails -ErrorAction Stop
         if ($sharedMailbox.RecipientTypeDetails -ne 'SharedMailbox') {
             throw "'$Mailbox' is a $($sharedMailbox.RecipientTypeDetails), not a shared mailbox."
@@ -780,23 +789,72 @@ $addScript = {
             $user = $trustee.Label
             foreach ($permission in $permissions) {
                 $step++
-                $State.Status = "Granting $permission to $user ($step of $total)..."
+                $State.Status = "$Action $permission for $user ($step of $total)..."
                 try {
-                    if ($permission -eq 'Full Access') {
+                    $warnings = @()
+                    $result = 'Success'
+                    if ($Action -eq 'Remove') {
+                        $State.Status = "Checking $permission for $user ($step of $total)..."
+                        $assignments = if ($permission -eq 'Full Access') {
+                            @(Get-MailboxPermission -Identity $target -User $trustee.Address -ErrorAction Stop |
+                                Where-Object { $_.AccessRights -contains 'FullAccess' -and -not $_.Deny })
+                        }
+                        else {
+                            @(Get-RecipientPermission -Identity $target -Trustee $trustee.Address -AccessRights SendAs `
+                                -ResultSize Unlimited -ErrorAction Stop |
+                                Where-Object { $_.AccessRights -contains 'SendAs' -and $_.AccessControlType -eq 'Allow' })
+                        }
+                        $direct = @($assignments | Where-Object { -not $_.IsInherited })
+                        $inherited = @($assignments | Where-Object { $_.IsInherited })
+                        if ($direct.Count -eq 0) {
+                            if ($inherited.Count -gt 0) {
+                                $result = 'Warning'
+                                $details = 'Only inherited permission was found; it cannot be removed here. Change the source assignment.'
+                            }
+                            else {
+                                $result = 'Not present'
+                                $details = 'No direct allow permission found; no change. Group-based access is not evaluated or removed.'
+                            }
+                        }
+                        else {
+                            if ($permission -eq 'Full Access') {
+                                $null = Remove-MailboxPermission -Identity $target -User $trustee.Address `
+                                    -AccessRights FullAccess -InheritanceType All -Confirm:$false `
+                                    -ErrorAction Stop -WarningAction SilentlyContinue -WarningVariable warnings
+                            }
+                            else {
+                                $null = Remove-RecipientPermission -Identity $target -Trustee $trustee.Address `
+                                    -AccessRights SendAs -Confirm:$false -ErrorAction Stop `
+                                    -WarningAction SilentlyContinue -WarningVariable warnings
+                            }
+                            $details = 'Direct permission removed. Group-based access, if any, is unchanged.'
+                            if ($inherited.Count -gt 0) {
+                                $result = 'Warning'
+                                $details += ' Inherited permission remains; change the source assignment to remove it.'
+                            }
+                        }
+                    }
+                    elseif ($permission -eq 'Full Access') {
                         $null = Add-MailboxPermission -Identity $target -User $trustee.Address `
                             -AccessRights FullAccess -InheritanceType All -AutoMapping $AutoMapping `
                             -Confirm:$false -ErrorAction Stop -WarningAction SilentlyContinue -WarningVariable warnings
+                        $details = 'Granted.'
                     }
                     else {
                         $null = Add-RecipientPermission -Identity $target -Trustee $trustee.Address `
                             -AccessRights SendAs -Confirm:$false -ErrorAction Stop -WarningAction SilentlyContinue -WarningVariable warnings
+                        $details = 'Granted.'
                     }
-                    $details = if ($warnings) { ($warnings | ForEach-Object { $_.Message }) -join ' ' } else { 'Granted.' }
-                    $results.Add([pscustomobject]@{ User = $user; Permission = $permission; Result = 'Success'; Details = $details })
+                    if ($warnings.Count -gt 0) {
+                        $result = 'Warning'
+                        $details += ' ' + (($warnings | ForEach-Object { $_.Message }) -join ' ')
+                    }
+                    $results.Add([pscustomobject]@{ User = $user; Permission = $permission; Result = $result; Details = $details })
                 }
                 catch {
                     $results.Add([pscustomobject]@{ User = $user; Permission = $permission; Result = 'Failed'; Details = $_.Exception.Message })
                 }
+                $State.Results = $results.ToArray()
                 $State.Percent = [int](($step / $total) * 100)
             }
         }
@@ -848,7 +906,7 @@ $reviewGrid.AddHandler(
 )
 
 $checkUsersButton.Add_Click({
-    $entries = Get-UserEntries
+    $entries = @(Get-UserEntries)
     $invalid = @($entries | Where-Object { $_ -match '[*?]' -or $_.Length -gt 256 })
     if ($entries.Count -eq 0 -or $invalid.Count -gt 0) {
         $validationText.Text = if ($invalid.Count -gt 0) {
@@ -868,9 +926,10 @@ $checkUsersButton.Add_Click({
         -Arguments @($entries, $identifierPattern, $ensureConnectionScript)
 })
 
-$addButton.Add_Click({
+function Invoke-PermissionAction {
+    param([ValidateSet('Add', 'Remove')][string]$Action)
     $mailbox = $mailboxTextBox.Text.Trim()
-    $rows = Get-ReviewRows
+    $rows = @(Get-ReviewRows)
 
     $errors = @()
     if ($mailbox -notmatch $identifierPattern) {
@@ -893,9 +952,15 @@ $addButton.Add_Click({
         if ($sendAsCheckBox.IsChecked) { 'Send As' }
     ) -join ' and '
     $trustees = @($rows | ForEach-Object { $_.Selected } | Group-Object Address | ForEach-Object { $_.Group[0] })
+    $verb = if ($Action -eq 'Remove') { 'Remove' } else { 'Grant' }
+    $message = "$verb $permissionText on $mailbox for $($trustees.Count) user(s)?`n`n$(($trustees | ForEach-Object { $_.Label }) -join "`n")"
+    if ($Action -eq 'Remove') {
+        $message += "`n`nOnly existing direct allow permissions will be removed. Inherited permissions, deny entries, and group-based access are not removed. Auto-mapping is ignored."
+    }
+    $message += "`n`nSuccessful changes are not rolled back if another permission fails."
     $confirm = [System.Windows.MessageBox]::Show(
         $window,
-        "Grant $permissionText on $mailbox to $($trustees.Count) user(s)?`n`n$(($trustees | ForEach-Object { $_.Label }) -join "`n")",
+        $message,
         'Confirm changes',
         [System.Windows.MessageBoxButton]::YesNo,
         [System.Windows.MessageBoxImage]::Question
@@ -906,10 +971,12 @@ $addButton.Add_Click({
 
     $resultsGrid.ItemsSource = $null
     Start-BackgroundOperation `
-        -Operation 'Add permissions' `
+        -Operation "$Action permissions" `
         -Script $addScript `
-        -Arguments @($mailbox, $trustees, [bool]$fullAccessCheckBox.IsChecked, [bool]$sendAsCheckBox.IsChecked, [bool]$autoMappingCheckBox.IsChecked, $ensureConnectionScript)
-})
+        -Arguments @($mailbox, $trustees, [bool]$fullAccessCheckBox.IsChecked, [bool]$sendAsCheckBox.IsChecked, [bool]$autoMappingCheckBox.IsChecked, $ensureConnectionScript, $Action)
+}
+$addButton.Add_Click({ Invoke-PermissionAction -Action Add })
+$removeButton.Add_Click({ Invoke-PermissionAction -Action Remove })
 
 $window.Add_Closing({
     param($windowSender, $windowEventArgs)
