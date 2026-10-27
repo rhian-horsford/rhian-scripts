@@ -14,10 +14,11 @@ and group administration.
 
 ## Requirements
 
-The administration tools use a GUI; `Find-Mailbox.ps1` runs in the terminal.
-All tools require PowerShell 7.6 or later with
+All tools use a GUI and require PowerShell 7.6 or later with
 ExchangeOnlineManagement 3.7 or later. ExchangeOnlineManagement 3.10.x also
-requires PowerShell 7.6 or later. The GUIs follow Windows light/dark appearance
+requires PowerShell 7.6 or later. The mailbox lookup GUI requires
+ExchangeOnlineManagement 3.7.2 or later for browser sign-in.
+The GUIs follow Windows light/dark appearance
 and update their colors while open.
 
 Install the free
@@ -34,6 +35,7 @@ From the VS Code PowerShell terminal, launch a tool with:
 & .\Export-ExpandedDistributionGroupMembers.ps1
 & .\Add-SharedMailboxPermission.ps1
 & .\Add-GroupOwnerOrMember.ps1
+& .\Find-Mailbox.ps1
 ```
 
 Review scripts before running them. Do not weaken the machine execution policy
@@ -41,9 +43,17 @@ or use an execution-policy bypass.
 
 ## Find-Mailbox
 
-Search the exact mailbox Alias field or a full primary or secondary SMTP email
-address. By default, both fields are checked. The script reuses an active
-Exchange Online connection or prompts for sign-in. It makes no Exchange changes.
+Run without arguments to open the mailbox lookup window. Enter an alias or full
+email address, select **Alias and email**, **Alias only**, or **Email only**, and
+select **Search**. Sign-in opens in the browser when needed. Searches run in a
+background session so the window stays responsive. Results appear in a read-only
+table; no match and lookup failures are reported separately below it.
+
+Searches match the exact mailbox Alias field or a full primary or secondary SMTP
+email address. By default, both fields are checked. It makes no Exchange changes.
+
+Supplying `-Identity` retains terminal output instead of opening the GUI. Terminal
+lookups reuse an active Exchange Online connection or prompt for sign-in:
 
 ```powershell
 .\Find-Mailbox.ps1 -Identity 'helpdesk'
@@ -59,7 +69,8 @@ Only active mailboxes visible to the signed-in account are searched, including
 user and shared mailboxes. This does not search contacts, groups, or deleted
 mailboxes. The account needs Exchange RBAC permission to run `Get-EXOMailbox`.
 
-Offline tests use mocked Exchange commands without signing in:
+Offline tests use mocked Exchange commands and briefly open and close the WPF
+window without signing in:
 
 ```powershell
 Import-Module Pester -RequiredVersion 3.4.0
