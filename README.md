@@ -10,10 +10,12 @@ and group administration.
 | [`Export-ExpandedDistributionGroupMembers.ps1`](Export-ExpandedDistributionGroupMembers.ps1) | Expand nested groups, evaluate dynamic groups, and export Microsoft 365 group members and owners. | Read-only |
 | [`Add-SharedMailboxPermission.ps1`](Add-SharedMailboxPermission.ps1) | Resolve users by name or email, then grant Full Access, Send As, or both on a shared mailbox. | Adds permissions |
 | [`Add-GroupOwnerOrMember.ps1`](Add-GroupOwnerOrMember.ps1) | Resolve users by name or email, then add or remove members, owners, or both on a distribution list or Microsoft 365 group. | Adds or removes group roles |
+| [`Find-Mailbox.ps1`](Find-Mailbox.ps1) | Find a mailbox by its alias or any assigned SMTP email address. | Read-only |
 
 ## Requirements
 
-All tools use a GUI and require PowerShell 7.6 or later with
+The administration tools use a GUI; `Find-Mailbox.ps1` runs in the terminal.
+All tools require PowerShell 7.6 or later with
 ExchangeOnlineManagement 3.7 or later. ExchangeOnlineManagement 3.10.x also
 requires PowerShell 7.6 or later. The GUIs follow Windows light/dark appearance
 and update their colors while open.
@@ -36,6 +38,33 @@ From the VS Code PowerShell terminal, launch a tool with:
 
 Review scripts before running them. Do not weaken the machine execution policy
 or use an execution-policy bypass.
+
+## Find-Mailbox
+
+Search the exact mailbox Alias field or a full primary or secondary SMTP email
+address. By default, both fields are checked. The script reuses an active
+Exchange Online connection or prompts for sign-in. It makes no Exchange changes.
+
+```powershell
+.\Find-Mailbox.ps1 -Identity 'helpdesk'
+.\Find-Mailbox.ps1 -Identity 'support@example.com'
+.\Find-Mailbox.ps1 -Identity 'helpdesk' -Lookup Alias
+.\Find-Mailbox.ps1 -Identity 'support@example.com' -Lookup Email
+```
+
+Results include display name, alias, primary SMTP address, mailbox type, and
+assigned SMTP addresses. A successful query with no results reports no mailbox
+found; connection, permission, and query failures throw an error instead.
+Only active mailboxes visible to the signed-in account are searched, including
+user and shared mailboxes. This does not search contacts, groups, or deleted
+mailboxes. The account needs Exchange RBAC permission to run `Get-EXOMailbox`.
+
+Offline tests use mocked Exchange commands without signing in:
+
+```powershell
+Import-Module Pester -RequiredVersion 3.4.0
+Invoke-Pester -Script .\Tests\Find-Mailbox.Tests.ps1
+```
 
 ## Export-ExpandedDistributionGroupMembers
 
