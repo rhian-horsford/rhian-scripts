@@ -1,7 +1,7 @@
 #requires -Version 7.6
 
 [CmdletBinding()]
-param()
+param([switch]$CreateSharedMailbox)
 
 Set-StrictMode -Version 2.0
 Add-Type -AssemblyName PresentationFramework
@@ -195,14 +195,29 @@ $xaml = @'
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="Shared mailbox permissions" FontSize="20" FontWeight="SemiBold" Foreground="#F2F4F8"/>
-                <TextBlock Margin="0,4,0,0" Foreground="#9AA4B3" TextWrapping="Wrap"
+                <TextBlock x:Name="HeadingText" Text="Shared mailbox permissions" FontSize="20" FontWeight="SemiBold" Foreground="#F2F4F8"/>
+                <TextBlock x:Name="DescriptionText" Margin="0,4,0,0" Foreground="#9AA4B3" TextWrapping="Wrap"
                            Text="Grant or remove Full Access and/or Send As permissions on a shared mailbox."/>
             </StackPanel>
             <Border Grid.Column="1" Background="#20232A" BorderBrush="#343842" BorderThickness="1" CornerRadius="6" Padding="10,7" Margin="12,0,12,0" VerticalAlignment="Center">
                 <TextBlock x:Name="ConnectionStatusText" Text="Not connected" Foreground="#FFB454"/>
             </Border>
             <Button x:Name="ConnectButton" Grid.Column="2" Content="Connect" VerticalAlignment="Center" Background="#0B63CE" Foreground="White"/>
+        </Grid>
+
+        <Grid x:Name="CreationFields" Visibility="Collapsed" Margin="0,0,0,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Margin="0,0,12,0">
+                <TextBlock Text="Display name" FontWeight="SemiBold" Foreground="#E9ECF2" Margin="0,0,0,6"/>
+                <TextBox x:Name="NameTextBox" MaxLength="64"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1">
+                <TextBlock Text="Alias" FontWeight="SemiBold" Foreground="#E9ECF2" Margin="0,0,0,6"/>
+                <TextBox x:Name="AliasTextBox" MaxLength="64"/>
+            </StackPanel>
         </Grid>
 
         <StackPanel Margin="0,0,0,12">
@@ -232,7 +247,7 @@ $xaml = @'
                     <CheckBox x:Name="SendAsCheckBox" Content="Send As"/>
                     <CheckBox x:Name="AutoMappingCheckBox" Content="Auto-map in Outlook (adding Full Access only)" IsChecked="True"/>
                 </StackPanel>
-                <TextBlock Foreground="#9AA4B3" Margin="0,8,0,0" TextWrapping="Wrap"
+                <TextBlock x:Name="PermissionHintText" Foreground="#9AA4B3" Margin="0,8,0,0" TextWrapping="Wrap"
                            Text="Removal checks direct permissions first. Inherited or group-based access is not removed. Auto-mapping applies only when adding."/>
                 <TextBlock x:Name="ValidationText" Foreground="#FF7185" Margin="0,8,0,0" TextWrapping="Wrap" Visibility="Collapsed"/>
             </StackPanel>
@@ -327,6 +342,17 @@ $resultsGrid = $window.FindName('ResultsGrid')
 $addButton = $window.FindName('AddButton')
 $removeButton = $window.FindName('RemoveButton')
 $closeButton = $window.FindName('CloseButton')
+$nameTextBox = $window.FindName('NameTextBox')
+$aliasTextBox = $window.FindName('AliasTextBox')
+if ($CreateSharedMailbox) {
+    $window.Title = 'Create Shared Mailbox'
+    $window.FindName('HeadingText').Text = 'Create shared mailbox'
+    $window.FindName('DescriptionText').Text = ''
+    $window.FindName('PermissionHintText').Text = ''
+    $window.FindName('CreationFields').Visibility = 'Visible'
+    $removeButton.Visibility = 'Collapsed'
+    $addButton.Content = 'Create mailbox'
+}
 $script:window = $window
 $script:connectionStatusText = $connectionStatusText
 
@@ -380,6 +406,7 @@ $state = [hashtable]::Synchronized(@{
     Results           = $null
     Error             = $null
     Operation         = ''
+    CreatedMailbox    = ''
     MsalApp           = $null
     MsalAccount       = $null
     AccessToken       = $null
@@ -424,7 +451,9 @@ function Get-UserEntries {
 function Set-InputsEnabled {
     param([bool]$Enabled)
     $connectButton.IsEnabled = $Enabled
-    $mailboxTextBox.IsEnabled = $Enabled
+    $mailboxTextBox.IsEnabled = $Enabled -and -not ($CreateSharedMailbox -and $state.CreatedMailbox)
+    $nameTextBox.IsEnabled = $mailboxTextBox.IsEnabled
+    $aliasTextBox.IsEnabled = $mailboxTextBox.IsEnabled
     $usersTextBox.IsEnabled = $Enabled
     $fullAccessCheckBox.IsEnabled = $Enabled
     $sendAsCheckBox.IsEnabled = $Enabled
@@ -446,6 +475,12 @@ function Update-ActionButtons {
         -not [string]::IsNullOrWhiteSpace($mailboxTextBox.Text) -and
         ([bool]$fullAccessCheckBox.IsChecked -or [bool]$sendAsCheckBox.IsChecked)
     $removeButton.IsEnabled = $addButton.IsEnabled
+    if ($CreateSharedMailbox) {
+        $addButton.IsEnabled = $addButton.IsEnabled -and -not $state.CreatedMailbox -and
+            -not [string]::IsNullOrWhiteSpace($nameTextBox.Text) -and
+            -not [string]::IsNullOrWhiteSpace($aliasTextBox.Text)
+        $removeButton.IsEnabled = $false
+    }
 }
 
 function Start-BackgroundOperation {
@@ -552,7 +587,8 @@ $timer.Add_Tick({
             $operationProgressBar.Value = 100
             $unresolved = @($rows | Where-Object { $null -eq $_.Selected }).Count
             $operationStatusText.Text = if ($unresolved -eq 0) {
-                "All $($rows.Count) user(s) resolved. Review the matches and select Add permissions or Remove permissions."
+                if ($CreateSharedMailbox) { "All $($rows.Count) user(s) resolved. Review the matches before creating the mailbox." }
+                else { "All $($rows.Count) user(s) resolved. Review the matches and select Add permissions or Remove permissions." }
             }
             else {
                 "$unresolved entry/entries need attention. Choose a match or correct the input and check again."
@@ -568,6 +604,9 @@ $timer.Add_Tick({
             $failed = @($results | Where-Object { $_.Result -eq 'Failed' }).Count
             $warnings = @($results | Where-Object { $_.Result -eq 'Warning' }).Count
             $operationStatusText.Text = "Completed: $($results.Count - $failed - $warnings) processed or unchanged, $warnings warning(s), $failed failed."
+            if ($CreateSharedMailbox -and $state.CreatedMailbox) {
+                $operationStatusText.Text += " Mailbox $($state.CreatedMailbox) was created. To retry failed permissions, use Add-SharedMailboxPermission.ps1 after provisioning completes."
+            }
             $icon = if ($failed -gt 0 -or $warnings -gt 0) { [System.Windows.MessageBoxImage]::Warning } else { [System.Windows.MessageBoxImage]::Information }
             [System.Windows.MessageBox]::Show(
                 $window,
@@ -766,7 +805,7 @@ $resolveScript = {
 
 $addScript = {
     param($State, $Mailbox, $Trustees, $GrantFullAccess, $GrantSendAs, $AutoMapping, $EnsureConnection,
-        [ValidateSet('Add', 'Remove')][string]$Action = 'Add')
+        [ValidateSet('Add', 'Remove')][string]$Action = 'Add', [bool]$CompleteState = $true)
     try {
         & $EnsureConnection $State
         if (-not ($GrantFullAccess -or $GrantSendAs) -or $Trustees.Count -eq 0) {
@@ -865,6 +904,66 @@ $addScript = {
         $State.Error = $_.Exception.Message
     }
     finally {
+        if ($CompleteState) { $State.Done = $true }
+    }
+}
+
+$createScript = {
+    param($State, $Name, $Alias, $Mailbox, $Trustees, $GrantFullAccess, $GrantSendAs, $AutoMapping,
+        $EnsureConnection, $GrantPermissions, $EmailPattern)
+    $creationResult = $null
+    try {
+        if ($State.CreatedMailbox) {
+            throw "Mailbox $($State.CreatedMailbox) was already created. Use the permission manager to retry grants."
+        }
+        if ([string]::IsNullOrWhiteSpace($Name) -or $Name.Length -gt 64) {
+            throw 'Enter a display name of 1 to 64 characters.'
+        }
+        if ($Alias -notmatch '^[a-zA-Z0-9._-]{1,64}$') {
+            throw 'Enter an alias of 1 to 64 letters, numbers, dots, underscores, or hyphens.'
+        }
+        if ($Mailbox -notmatch $EmailPattern) { throw 'Enter a valid shared mailbox email address.' }
+        if (-not ($GrantFullAccess -or $GrantSendAs) -or $Trustees.Count -eq 0 -or
+            @($Trustees | Where-Object { -not $_.Address }).Count -gt 0) {
+            throw 'Select at least one permission and resolve at least one user.'
+        }
+        & $EnsureConnection $State
+        $State.Status = "Creating shared mailbox $Mailbox..."
+        $warnings = @()
+        $null = New-Mailbox -Shared -Name $Name -DisplayName $Name -Alias $Alias -PrimarySmtpAddress $Mailbox `
+            -ErrorAction Stop -WarningAction SilentlyContinue -WarningVariable warnings
+        $State.CreatedMailbox = $Mailbox
+        $creationResult = [pscustomobject]@{
+            User = $Mailbox; Permission = 'Create mailbox'; Result = 'Success'; Details = 'Shared mailbox created.'
+        }
+        if ($warnings.Count -gt 0) {
+            $creationResult.Result = 'Warning'
+            $creationResult.Details += ' ' + (($warnings | ForEach-Object { $_.Message }) -join ' ')
+        }
+        $State.Results = @()
+        & $GrantPermissions $State $Mailbox $Trustees $GrantFullAccess $GrantSendAs $AutoMapping {} Add $false
+        if ($State.Error) {
+            $State.Results = @($State.Results) + [pscustomobject]@{
+                User = $Mailbox; Permission = 'Permission setup'; Result = 'Failed'; Details = [string]$State.Error
+            }
+            $State.Error = $null
+        }
+    }
+    catch {
+        $State.Error = $_.Exception.Message
+    }
+    finally {
+        if ($null -ne $creationResult) {
+            if ($State.Error) {
+                $State.Results = @($State.Results) + [pscustomobject]@{
+                    User = $Mailbox; Permission = 'Permission setup'; Result = 'Failed'; Details = [string]$State.Error
+                }
+                $State.Error = $null
+            }
+            $State.Results = @($creationResult) + @($State.Results)
+            $State.Percent = 100
+            $State.Status = "Mailbox $Mailbox created. Review permission results."
+        }
         $State.Done = $true
     }
 }
@@ -893,6 +992,9 @@ $mailboxTextBox.Add_TextChanged({
     $validationText.Visibility = 'Collapsed'
     Update-ActionButtons
 })
+
+$nameTextBox.Add_TextChanged({ $validationText.Visibility = 'Collapsed'; Update-ActionButtons })
+$aliasTextBox.Add_TextChanged({ $validationText.Visibility = 'Collapsed'; Update-ActionButtons })
 
 $usersTextBox.Add_TextChanged({
     $validationText.Visibility = 'Collapsed'
@@ -941,6 +1043,15 @@ function Invoke-PermissionAction {
     if (-not ($fullAccessCheckBox.IsChecked -or $sendAsCheckBox.IsChecked)) {
         $errors += 'Select at least one permission.'
     }
+    if ($CreateSharedMailbox) {
+        if ($state.CreatedMailbox) { $errors += 'This mailbox was already created. Use the permission manager to retry grants.' }
+        if ([string]::IsNullOrWhiteSpace($nameTextBox.Text) -or $nameTextBox.Text.Trim().Length -gt 64) {
+            $errors += 'Enter a display name of 1 to 64 characters.'
+        }
+        if ($aliasTextBox.Text.Trim() -notmatch '^[a-zA-Z0-9._-]{1,64}$') {
+            $errors += 'Enter an alias of 1 to 64 letters, numbers, dots, underscores, or hyphens.'
+        }
+    }
     if ($errors.Count -gt 0) {
         $validationText.Text = $errors -join "`n"
         $validationText.Visibility = 'Visible'
@@ -954,6 +1065,11 @@ function Invoke-PermissionAction {
     $trustees = @($rows | ForEach-Object { $_.Selected } | Group-Object Address | ForEach-Object { $_.Group[0] })
     $verb = if ($Action -eq 'Remove') { 'Remove' } else { 'Grant' }
     $message = "$verb $permissionText on $mailbox for $($trustees.Count) user(s)?`n`n$(($trustees | ForEach-Object { $_.Label }) -join "`n")"
+    if ($CreateSharedMailbox) {
+        $message = "Create shared mailbox '$($nameTextBox.Text.Trim())' with alias '$($aliasTextBox.Text.Trim())' and email $mailbox, then grant $permissionText to $($trustees.Count) user(s)?`n`n$(($trustees | ForEach-Object { $_.Label }) -join "`n")"
+        if ($fullAccessCheckBox.IsChecked) { $message += "`n`nAuto-map in Outlook: $([bool]$autoMappingCheckBox.IsChecked)." }
+        $message += "`n`nThe mailbox will remain created even if permission grants fail. Retry failed grants with Add-SharedMailboxPermission.ps1 after provisioning completes."
+    }
     if ($Action -eq 'Remove') {
         $message += "`n`nOnly existing direct allow permissions will be removed. Inherited permissions, deny entries, and group-based access are not removed. Auto-mapping is ignored."
     }
@@ -970,6 +1086,13 @@ function Invoke-PermissionAction {
     }
 
     $resultsGrid.ItemsSource = $null
+    if ($CreateSharedMailbox) {
+        Start-BackgroundOperation -Operation 'Create mailbox' -Script $createScript `
+            -Arguments @($nameTextBox.Text.Trim(), $aliasTextBox.Text.Trim(), $mailbox, $trustees,
+                [bool]$fullAccessCheckBox.IsChecked, [bool]$sendAsCheckBox.IsChecked,
+                [bool]$autoMappingCheckBox.IsChecked, $ensureConnectionScript, $addScript, $identifierPattern)
+        return
+    }
     Start-BackgroundOperation `
         -Operation "$Action permissions" `
         -Script $addScript `

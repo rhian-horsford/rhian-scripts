@@ -9,6 +9,7 @@ and group administration.
 | --- | --- | --- |
 | [`Export-ExpandedDistributionGroupMembers.ps1`](Export-ExpandedDistributionGroupMembers.ps1) | Expand nested groups, evaluate dynamic groups, and export Microsoft 365 group members and owners. | Read-only |
 | [`Add-SharedMailboxPermission.ps1`](Add-SharedMailboxPermission.ps1) | Resolve users by name or email, then grant Full Access, Send As, or both on a shared mailbox. | Adds permissions |
+| [`New-SharedMailbox.ps1`](New-SharedMailbox.ps1) | Create a shared mailbox and grant Full Access, Send As, or both to resolved users. | Creates mailbox and adds permissions |
 | [`Add-GroupOwnerOrMember.ps1`](Add-GroupOwnerOrMember.ps1) | Resolve users by name or email, then add or remove members, owners, or both on a distribution list or Microsoft 365 group. | Adds or removes group roles |
 | [`Find-Mailbox.ps1`](Find-Mailbox.ps1) | Find a mailbox by its alias or any assigned SMTP email address. | Read-only |
 
@@ -34,6 +35,7 @@ From the VS Code PowerShell terminal, launch a tool with:
 ```powershell
 & .\Export-ExpandedDistributionGroupMembers.ps1
 & .\Add-SharedMailboxPermission.ps1
+& .\New-SharedMailbox.ps1
 & .\Add-GroupOwnerOrMember.ps1
 & .\Find-Mailbox.ps1
 ```
@@ -120,6 +122,47 @@ The signed-in account needs Exchange RBAC permission to run
 `Add-MailboxPermission` and `Add-RecipientPermission`, commonly provided by
 **Recipient Management** or an equivalent custom role. Permission changes are
 applied immediately; use a test mailbox when validating the workflow.
+
+## New-SharedMailbox
+
+Run `New-SharedMailbox.ps1`, connect to Exchange Online, and enter a display
+name, alias, and primary email address in an accepted domain for your tenant.
+Names and aliases are limited to 64 characters. This tool accepts letters,
+numbers, dots, underscores, and hyphens in aliases. Enter the users, select
+**Check users**, and choose a match for any ambiguous names. Select **Full
+Access**, **Send As**, or both; auto-mapping applies only to Full Access.
+Select **Create mailbox** and review the confirmation before proceeding.
+
+The launcher reuses `Add-SharedMailboxPermission.ps1`; keep both scripts in
+the same folder. Launching the permissions script directly retains its normal
+add/remove workflow. The new tool creates a shared mailbox using
+`New-Mailbox -Shared`, then applies permissions using the same grant routine
+as the existing tool. If creation fails, no permissions are granted and an
+existing mailbox is not reused or modified.
+
+Results show mailbox creation and each user/permission separately. Successful
+changes are not rolled back. If provisioning delays or other errors prevent
+permission grants, the mailbox remains created. Wait for provisioning to
+complete, then use **Add-SharedMailboxPermission** to retry only failed grants.
+Repeat creation is blocked in the current window after successful creation;
+close and reopen the tool to create another mailbox. Exchange also rejects
+conflicting names, aliases, or addresses.
+
+The signed-in account needs Exchange RBAC permission to run `New-Mailbox`,
+`Get-EXOMailbox`, `Get-EXORecipient`, `Get-Recipient`,
+`Add-MailboxPermission`, and `Add-RecipientPermission`, commonly provided by
+**Recipient Management** or an equivalent custom role.
+
+Offline tests mock Exchange commands and check the WPF interface without
+signing in or changing your tenant:
+
+```powershell
+Import-Module Pester -RequiredVersion 3.4.0
+Invoke-Pester -Script .\Tests\New-SharedMailbox.Tests.ps1
+```
+
+Validate live sign-in, RBAC, and provisioning with a test mailbox before using
+the tool for production changes.
 
 ## Add-GroupOwnerOrMember
 
